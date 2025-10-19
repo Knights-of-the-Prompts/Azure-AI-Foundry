@@ -1,5 +1,6 @@
 import asyncio
 from datetime import date
+import json
 import logging
 import os
 
@@ -70,13 +71,43 @@ except Exception as e:
     )
     print("Using fallback client configuration")
 
-functions = AsyncFunctionTool(
-    {
-        sales_data.async_fetch_sales_data_using_sqlite_query,
-    }
-)
+# Create async function with metadata
+async def async_fetch_sales_data(query_info: str) -> str:
+    """
+    Search Contoso product information using natural language queries.
 
-# INSTRUCTIONS_FILE = "instructions/instructions_function_calling.txt"
+    Args:
+        query_info: A natural language description of what product information to retrieve 
+                   (e.g. 'camping tents', 'family tents', 'trailmaster')
+    
+    Returns:
+        JSON string containing matching product information
+    """
+    if not query_info or len(query_info.strip()) == 0:
+        return json.dumps({
+            "error": "Please provide a search term",
+            "found": 0,
+            "products": [],
+            "suggestion": "Try searching for specific product types like 'camping tents' or features like 'waterproof'"
+        })
+    
+    try:
+        result = await sales_data.async_fetch_sales_data(query_info)
+        # Parse result to check if it's valid JSON
+        parsed = json.loads(result)
+        return result
+    except Exception as e:
+        return json.dumps({
+            "error": str(e),
+            "found": 0,
+            "products": [],
+            "suggestion": "There was an error processing your request. Try a different search term."
+        })
+
+# Register the function
+functions = AsyncFunctionTool({async_fetch_sales_data})
+
+INSTRUCTIONS_FILE = "instructions/instructions_function_calling.txt"
 # INSTRUCTIONS_FILE = "instructions/instructions_code_interpreter.txt"
 # INSTRUCTIONS_FILE = "instructions/instructions_file_search.txt"
 
@@ -85,7 +116,7 @@ async def add_agent_tools():
     """Add tools for the agent."""
 
     # Add the functions tool
-    # toolset.add(functions)
+    toolset.add(functions)
 
     # # Add the code interpreter tool
     # code_interpreter = CodeInterpreterTool()
@@ -113,7 +144,7 @@ async def initialize() -> tuple[Agent, AgentThread]:
     thread = None
 
     await sales_data.connect()
-    database_schema_string = await sales_data.get_database_info()
+    database_schema_string = await sales_data.get_data_info()
 
     try:
         env = os.getenv("ENVIRONMENT", "local")
@@ -133,7 +164,7 @@ async def initialize() -> tuple[Agent, AgentThread]:
         print("Creating agent...")
         agent = project_client.agents.create_agent(
             model=API_DEPLOYMENT_NAME,
-            name="Contoso Sales AI Agent",
+            name="DOC AI Agent",
             instructions=instructions,
             toolset=toolset,
             temperature=TEMPERATURE,
@@ -188,12 +219,24 @@ async def post_message(thread_id: str, content: str, agent: Agent, thread: Agent
         
         # Enhanced polling with action handling
         import time
-        max_iterations = 120  # Max 2 minutes
+        max_iterations = 30  # Reduce max time to 1 minute
         iteration = 0
+        last_action_count = 0  # Track number of actions in same state
+        last_status = None
         
         while run.status in ("queued", "in_progress", "requires_action") and iteration < max_iterations:
-            time.sleep(2)  # Increased sleep time
+            time.sleep(2)
             iteration += 1
+            
+            # Track repeated states to detect loops
+            if run.status == last_status:
+                last_action_count += 1
+                if last_action_count > 5:  # Break if same state for too long
+                    print("Detected potential infinite loop, breaking...")
+                    break
+            else:
+                last_status = run.status
+                last_action_count = 0
             
             try:
                 run = project_client.agents.runs.get(thread_id=thread.id, run_id=run.id)
@@ -213,10 +256,19 @@ async def post_message(thread_id: str, content: str, agent: Agent, thread: Agent
                         print(f"Executing function: {tool_call.function.name}")
                         
                         # Execute the function call
-                        if tool_call.function.name == "async_fetch_sales_data_using_sqlite_query":
-                            import json
+                        if tool_call.function.name == "async_fetch_sales_data":
                             args = json.loads(tool_call.function.arguments)
-                            result = await sales_data.async_fetch_sales_data_using_sqlite_query(args["sqlite_query"])
+                            query = args.get("query_info", "").strip()
+                            print(f"Searching for: {query}")
+                            
+                            result = await async_fetch_sales_data(query)
+                            # Validate result is proper JSON
+                            parsed = json.loads(result)
+                            if parsed.get("status") == "success":
+                                print(f"Search successful, found {parsed.get('found', 0)} products")
+                            else:
+                                print(f"Search returned no results: {parsed.get('suggestion', '')}")
+                                
                             tool_outputs.append({
                                 "tool_call_id": tool_call.id,
                                 "output": result
