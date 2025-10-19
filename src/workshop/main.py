@@ -3,6 +3,7 @@ from datetime import date
 import json
 import logging
 import os
+from pathlib import Path
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.agents import AgentsClient
@@ -147,10 +148,12 @@ async def initialize() -> tuple[Agent, AgentThread]:
     database_schema_string = await sales_data.get_data_info()
 
     try:
-        env = os.getenv("ENVIRONMENT", "local")
-        INSTRUCTIONS_FILE_PATH = f"{'src/workshop/' if env == 'container' else ''}{INSTRUCTIONS_FILE}"
+        # Get the current script's directory and resolve the instructions file path
+        current_dir = Path(__file__).parent.resolve()
+        instructions_path = current_dir / INSTRUCTIONS_FILE
+        print(f"Looking for instructions file at: {instructions_path}")
         
-        with open(INSTRUCTIONS_FILE_PATH, "r", encoding="utf-8", errors="ignore") as file:
+        with open(instructions_path, "r", encoding="utf-8", errors="ignore") as file:
             instructions = file.read()
 
         # Replace the placeholder with the database schema string
