@@ -1,8 +1,10 @@
 import os
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.agents.models import ThreadMessage
+from azure.storage.blob import BlobServiceClient, ContainerClient
 
 from terminal_colors import TerminalColors as tc
 
@@ -154,27 +156,180 @@ class Utilities:
         except Exception as e:
             print(f"Error handling file downloads: {e}")
 
-    def create_vector_store(self, project_client: AIProjectClient, files: list[str], vector_name_name: str) -> None:
-        """Upload a file to the project."""
+    def search_local_files(self, directory: Path, search_term: str) -> list[Path]:
+        """Search for files in the local directory using a search term."""
+        self.log_msg_purple(f"Searching in {directory} for: {search_term}")
+        
+        try:
+            # Convert search term to lowercase for case-insensitive search
+            search_term = search_term.lower()
+            results = []
+            
+            # Make sure directory exists
+            if not directory.exists():
+                self.log_msg_purple(f"Directory {directory} does not exist")
+                return results
+                
+            # Search through all PDF files in the directory
+            for file_path in directory.glob("**/*.pdf"):
+                try:
+                    # Check filename first
+                    if search_term in file_path.name.lower():
+                        results.append(file_path)
+                        continue
+                        
+                    # If not found in filename, check content
+                    from pdfminer.high_level import extract_text
+                    content = extract_text(str(file_path)).lower()
+                    
+                    if search_term in content:
+                        results.append(file_path)
+                        self.log_msg_green(f"Found match in: {file_path.name}")
+                        
+                except Exception as file_error:
+                    self.log_msg_purple(f"Error processing file {file_path}: {str(file_error)}")
+                    continue
+            
+            self.log_msg_green(f"Found {len(results)} matching files")
+            return results
+            
+        except Exception as e:
+            self.log_msg_purple(f"Error during search: {str(e)}")
+            return []
 
-        file_ids = []
-        env = os.getenv("ENVIRONMENT", "local")
-        prefix = "src/workshop/" if env == "container" else ""
-
-        # Upload the files to Azure AI
-        for file in files:
-            file_path = Path(f"{prefix}{file}")
-            self.log_msg_purple(f"Uploading file: {file_path}")
-            with file_path.open("rb") as f:
-                # Upload file using agents upload_file method
-                uploaded_file = project_client.agents.upload_file(file=f, purpose="assistants")
-                file_ids.append(uploaded_file.id)
-
-        self.log_msg_purple("Creating the vector store")
-
-        # Create a vector store  using the vector_stores.create_and_poll method
-        vector_store = project_client.agents.create_vector_store_and_poll(
-            file_ids=file_ids, name=vector_name_name
-        )
-        self.log_msg_purple(f"Vector store created: {vector_store.id}")
-        return vector_store
+    def download_from_blob_storage(self, blob_sas_url: str, target_dir: Path) -> list[Path]:
+        """Download new or updated files from Azure Blob Storage using SAS URL."""
+        self.log_msg_purple(f"Starting sync with Azure Blob Storage")
+        downloaded_files = []
+        
+        try:
+            # Parse the SAS URL
+            parsed_url = urlparse(blob_sas_url)
+            # Get the container name from the path
+            container_name = parsed_url.path.split('/')[1]
+            
+            # Extract the account URL
+            account_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+            
+            self.log_msg_purple(f"Connecting to blob storage: {account_url}")
+            
+            # Create the blob service client from the SAS URL
+            blob_service_client = BlobServiceClient(blob_sas_url)
+            container_client = blob_service_client.get_container_client(container_name)
+            
+            # Ensure target directory exists
+            target_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Get list of existing local files and their sizes
+            local_files = {}
+            for file_path in target_dir.glob('*'):
+                if file_path.is_file():
+                    local_files[file_path.name] = file_path.stat().st_size
+            
+            self.log_msg_purple(f"Found {len(local_files)} existing local files")
+            
+            # List all blobs in the container
+            blob_list = list(container_client.list_blobs())
+            self.log_msg_purple(f"Found {len(blob_list)} files in blob storage")
+            
+            # Compare and download only new or updated files
+            for blob in blob_list:
+                try:
+                    target_path = target_dir / blob.name
+                    should_download = False
+                    
+                    if blob.name not in local_files:
+                        self.log_msg_purple(f"New file found: {blob.name}")
+                        should_download = True
+                    elif local_files[blob.name] != blob.size:
+                        self.log_msg_purple(f"Updated file found: {blob.name}")
+                        should_download = True
+                    
+                    if should_download:
+                        self.log_msg_purple(f"Downloading: {blob.name}")
+                        blob_client = container_client.get_blob_client(blob.name)
+                        with open(target_path, "wb") as file:
+                            data = blob_client.download_blob()
+                            file.write(data.readall())
+                        downloaded_files.append(target_path)
+                        self.log_msg_green(f"Successfully downloaded: {target_path}")
+                    else:
+                        self.log_msg_purple(f"Skipping unchanged file: {blob.name}")
+                    
+                except Exception as blob_error:
+                    self.log_msg_purple(f"Error processing blob {blob.name}: {str(blob_error)}")
+                    continue
+            
+            self.log_msg_green(f"Downloaded {len(downloaded_files)} new or updated files")
+            return downloaded_files
+            
+        except Exception as e:
+            self.log_msg_purple(f"Error accessing blob storage: {str(e)}")
+            return downloaded_files
+            
+    def sync_vector_store_files(self, project_client: AIProjectClient, vector_store_id: str, target_dir: Path) -> list[Path]:
+        """Download and sync all files from a vector store to a local directory."""
+        self.log_msg_purple(f"Starting sync for vector store: {vector_store_id}")
+        self.log_msg_purple(f"Target directory: {target_dir.absolute()}")
+        
+        downloaded_files = []
+        
+        try:
+            # Ensure target directory exists
+            target_dir.mkdir(parents=True, exist_ok=True)
+            self.log_msg_purple("Target directory created/verified")
+            
+            # Get vector store details
+            self.log_msg_purple("Fetching vector store details...")
+            vector_store = project_client.agents.get_vector_store(vector_store_id)
+            self.log_msg_green(f"Found vector store with {len(vector_store.file_ids)} files")
+            
+            # Process each file
+            for file_id in vector_store.file_ids:
+                try:
+                    self.log_msg_purple(f"Processing file ID: {file_id}")
+                    
+                    # Get file metadata using agents API
+                    file_info = project_client.agents.get_file(file_id)
+                    target_path = target_dir / f"{file_info.filename}"
+                    
+                    self.log_msg_purple(f"Downloading to: {target_path.absolute()}")
+                    
+                    # Download file content
+                    with target_path.open("wb") as f:
+                        for chunk in project_client.agents.download_file(file_id):
+                            f.write(chunk)
+                    
+                    downloaded_files.append(target_path)
+                    self.log_msg_green(f"Successfully downloaded: {target_path.name}")
+                    
+                except Exception as file_error:
+                    self.log_msg_purple(f"Error downloading file {file_id}: {str(file_error)}")
+                    continue
+                    
+            return downloaded_files
+            
+        except Exception as e:
+            self.log_msg_purple(f"Error in vector store sync: {str(e)}")
+            return downloaded_files
+        for file_id in vector_store.file_ids:
+            try:
+                # Get file metadata
+                file_info = project_client.files.get(file_id)
+                target_path = target_dir / f"{file_info.filename}"
+                
+                self.log_msg_purple(f"Downloading: {file_info.filename}")
+                
+                # Download and write file
+                with target_path.open("wb") as f:
+                    for chunk in project_client.files.download(file_id):
+                        f.write(chunk)
+                        
+                downloaded_files.append(target_path)
+                self.log_msg_green(f"Successfully downloaded: {target_path}")
+                
+            except Exception as e:
+                self.log_msg_purple(f"Error downloading file {file_id}: {e}")
+                continue
+                
+        return downloaded_files

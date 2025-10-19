@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import time
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.agents import AgentsClient
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-TENTS_DATA_SHEET_FILE = "datasheet/contoso-tents-datasheet.pdf"
+TENTS_DATA_SHEET_FILE = Path("datasheet/contoso-tents-datasheet.pdf")
 API_DEPLOYMENT_NAME = os.getenv("AGENT_MODEL_DEPLOYMENT_NAME")
 PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
 AZURE_SUBSCRIPTION_ID = os.environ["AZURE_SUBSCRIPTION_ID"]
@@ -39,7 +40,6 @@ MAX_PROMPT_TOKENS = 10240
 TEMPERATURE = 0.1
 TOP_P = 0.1
 
-toolset = AsyncToolSet()
 sales_data = SalesData()
 utilities = Utilities()
 
@@ -105,38 +105,77 @@ async def async_fetch_sales_data(query_info: str) -> str:
             "suggestion": "There was an error processing your request. Try a different search term."
         })
 
-# Register the function
-functions = AsyncFunctionTool({async_fetch_sales_data})
-
 INSTRUCTIONS_FILE = "instructions/instructions_function_calling.txt"
 # INSTRUCTIONS_FILE = "instructions/instructions_code_interpreter.txt"
-# INSTRUCTIONS_FILE = "instructions/instructions_file_search.txt"
+INSTRUCTIONS_FILE = "instructions/instructions_file_search.txt"
 
 
-async def add_agent_tools():
-    """Add tools for the agent."""
-
-    # Add the functions tool
-    toolset.add(functions)
-
-    # # Add the code interpreter tool
-    # code_interpreter = CodeInterpreterTool()
-    # toolset.add(code_interpreter)
-
-    # # Add file search tool - uncomment to enable file search capability
-    # print("Creating vector store for file search...")
-    # try:
-    #     vector_store = utilities.create_vector_store(
-    #         project_client,
-    #         files=[TENTS_DATA_SHEET_FILE],
-    #         vector_name_name="Contoso Product Information Vector Store",
-    #     )
-    #     file_search_tool = FileSearchTool(vector_store_ids=[vector_store.id])
-    #     toolset.add(file_search_tool)
-    #     print(f"File search tool added with vector store: {vector_store.id}")
-    # except Exception as e:
-    #     print(f"Error creating file search tool: {e}")
-    #     print("Continuing without file search capability...")
+async def setup_agent_tools() -> AsyncToolSet:
+    """Set up all agent tools including document search and sales data."""
+    agent_toolset = AsyncToolSet()
+    
+    try:
+        # Get current directory for document operations
+        current_dir = Path(__file__).parent.resolve()
+        datasheet_dir = current_dir / "datasheet"
+        
+        # First check and sync files from Azure Blob Storage
+        print("Checking Azure Blob Storage for new files...")
+        blob_sas_url = os.getenv("AZURE_BLOB")
+        if blob_sas_url:
+            try:
+                print("Syncing files from Azure Blob Storage...")
+                downloaded_files = utilities.download_from_blob_storage(
+                    blob_sas_url,
+                    datasheet_dir
+                )
+                print(f"Synchronized {len(downloaded_files)} files")
+            except Exception as blob_error:
+                print(f"Error syncing blob storage: {blob_error}")
+        else:
+            print("AZURE_BLOB environment variable not found. Using existing files only.")
+            
+        # Set up document search function
+        async def search_documents(search_term: str) -> str:
+            """
+            Search through all documents in the datasheet folder.
+            
+            Args:
+                search_term: Text to search for in the documents.
+                
+            Returns:
+                JSON string with search results and matching files.
+            """
+            try:
+                results = utilities.search_local_files(datasheet_dir, search_term)
+                return json.dumps({
+                    "matches": len(results),
+                    "files": [str(p.name) for p in results],
+                    "search_term": search_term,
+                    "status": "success"
+                })
+            except Exception as e:
+                return json.dumps({
+                    "status": "error",
+                    "error": str(e),
+                    "search_term": search_term
+                })
+        
+        # Create combined toolset with all functions
+        toolset_functions = {search_documents, async_fetch_sales_data}
+        agent_toolset.add(AsyncFunctionTool(toolset_functions))
+        
+        # Add code interpreter for visualizations
+        agent_toolset.add(CodeInterpreterTool())
+        
+        print("All agent tools configured successfully")
+        return agent_toolset
+        
+    except Exception as e:
+        print(f"Error setting up agent tools: {e}")
+        return agent_toolset  # Return toolset even if some setup failed
+    # This section has been consolidated into the setup_agent_tools function above
+    pass
 
 
 async def initialize() -> tuple[Agent, AgentThread]:
@@ -160,8 +199,8 @@ async def initialize() -> tuple[Agent, AgentThread]:
         instructions = instructions.replace("{database_schema_string}", database_schema_string)
         instructions = instructions.replace("{current_date}", date.today().strftime("%Y-%m-%d"))
 
-        # Add agent tools (this must be done inside the context manager)
-        await add_agent_tools()
+        # Set up all agent tools including document search
+        toolset = await setup_agent_tools()
 
         # Create agent and thread without closing the context manager
         print("Creating agent...")
@@ -202,6 +241,28 @@ async def cleanup(agent: Agent, thread: AgentThread) -> None:
 async def post_message(thread_id: str, content: str, agent: Agent, thread: AgentThread) -> None:
     """Post a message to the Azure AI Agent Service."""
     try:
+        # Get current directory for document operations
+        current_dir = Path(__file__).parent.resolve()
+        datasheet_dir = current_dir / "datasheet"
+        
+        # Define document search function in this scope
+        async def search_documents(search_term: str) -> str:
+            """Search through all documents in the datasheet folder."""
+            try:
+                results = utilities.search_local_files(datasheet_dir, search_term)
+                return json.dumps({
+                    "matches": len(results),
+                    "files": [str(p.name) for p in results],
+                    "search_term": search_term,
+                    "status": "success"
+                })
+            except Exception as e:
+                return json.dumps({
+                    "status": "error",
+                    "error": str(e),
+                    "search_term": search_term
+                })
+        
         print(f"Creating message in thread {thread_id}...")
         
         # Create message using project_client directly
@@ -259,23 +320,33 @@ async def post_message(thread_id: str, content: str, agent: Agent, thread: Agent
                         print(f"Executing function: {tool_call.function.name}")
                         
                         # Execute the function call
+                        args = json.loads(tool_call.function.arguments)
+                        
                         if tool_call.function.name == "async_fetch_sales_data":
-                            args = json.loads(tool_call.function.arguments)
                             query = args.get("query_info", "").strip()
-                            print(f"Searching for: {query}")
-                            
+                            print(f"Searching sales data for: {query}")
                             result = await async_fetch_sales_data(query)
-                            # Validate result is proper JSON
-                            parsed = json.loads(result)
-                            if parsed.get("status") == "success":
-                                print(f"Search successful, found {parsed.get('found', 0)} products")
-                            else:
-                                print(f"Search returned no results: {parsed.get('suggestion', '')}")
-                                
-                            tool_outputs.append({
-                                "tool_call_id": tool_call.id,
-                                "output": result
-                            })
+                            
+                        elif tool_call.function.name == "search_documents":
+                            search_term = args.get("search_term", "").strip()
+                            print(f"Searching documents for: {search_term}")
+                            result = await search_documents(search_term)
+                        
+                        else:
+                            print(f"Unknown function: {tool_call.function.name}")
+                            continue
+                            
+                        # Validate result is proper JSON
+                        parsed = json.loads(result)
+                        if parsed.get("status") == "success":
+                            print(f"Search successful: {parsed}")
+                        else:
+                            print(f"Search returned error or no results: {parsed}")
+                            
+                        tool_outputs.append({
+                            "tool_call_id": tool_call.id,
+                            "output": result
+                        })
                     
                     # Submit the tool outputs
                     if tool_outputs:

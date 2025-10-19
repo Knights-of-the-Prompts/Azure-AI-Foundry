@@ -26,10 +26,15 @@ class SalesData:
             return
             
         try:
-            pdf_path = Path('/workspaces/Azure-AI-Foundry/src/workshop') / DATASHEET_FILE
+            # Use relative path from the current file
+            current_dir = Path(__file__).parent
+            pdf_path = current_dir / DATASHEET_FILE
+            
+            if not pdf_path.exists():
+                raise FileNotFoundError(f"PDF file not found at {pdf_path}")
             
             # Extract text from PDF
-            text = extract_text(pdf_path)
+            text = extract_text(str(pdf_path))
             
             # Parse the text into structured data
             self._cached_data = self._parse_pdf_content(text)
