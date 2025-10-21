@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
@@ -197,40 +198,85 @@ class Utilities:
             self.log_msg_purple(f"Error during search: {str(e)}")
             return []
 
-    def download_from_blob_storage(self, blob_sas_url: str, target_dir: Path) -> list[Path]:
-        """Download new or updated files from Azure Blob Storage using SAS URL."""
-        self.log_msg_purple(f"Starting sync with Azure Blob Storage")
+    def download_from_blob_storage(self, storage_account_name: str, storage_key: str, container_name: str, target_dir: Path) -> list[Path]:
+        """Download new or updated files from Azure Blob Storage using storage account credentials."""
+        self.log_msg_purple(f"=== Starting Azure Blob Storage Synchronization ===")
+        
+        # Validate inputs
+        if not storage_account_name or not storage_account_name.strip():
+            raise ValueError("Storage account name cannot be empty")
+        if not storage_key or not storage_key.strip():
+            raise ValueError("Storage account key cannot be empty")
+        if not container_name or not container_name.strip():
+            raise ValueError("Container name cannot be empty")
+            
+        # Log configuration (mask storage key for security)
+        self.log_msg_purple(f"Storage Account: {storage_account_name}")
+        self.log_msg_purple(f"Container: {container_name}")
+        self.log_msg_purple(f"Target Directory: {target_dir}")
+        self.log_msg_purple(f"Key Length: {len(storage_key)} characters")
         downloaded_files = []
         
         try:
-            # Parse the SAS URL
-            parsed_url = urlparse(blob_sas_url)
-            # Get the container name from the path
-            container_name = parsed_url.path.split('/')[1]
+            # Construct the account URL
+            account_url = f"https://{storage_account_name}.blob.core.windows.net"
+            self.log_msg_purple(f"Establishing connection to Azure Storage account...")
+            self.log_msg_purple(f"Account URL: {account_url}")
             
-            # Extract the account URL
-            account_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+            # Validate storage key format (basic check)
+            if len(storage_key) < 64 or '==' not in storage_key:
+                self.log_msg_purple("⚠️  Warning: Storage key format might be invalid")
+                self.log_msg_purple("    Expected format: Base64 encoded key ending with '=='")
             
-            self.log_msg_purple(f"Connecting to blob storage: {account_url}")
+            try:
+                # Create the blob service client using account key
+                self.log_msg_purple("Initializing Blob Service Client...")
+                blob_service_client = BlobServiceClient(
+                    account_url=account_url,
+                    credential=storage_key
+                )
+                
+                # Test connection with a simple operation
+                self.log_msg_purple("Testing connection...")
+                account_info = blob_service_client.get_account_information()
+                self.log_msg_green("✓ Successfully connected to Azure Storage account")
+                self.log_msg_purple(f"Account SKU: {account_info['sku_name']}")
+                
+            except Exception as auth_error:
+                error_message = str(auth_error)
+                if "AuthorizationFailure" in error_message:
+                    self.log_msg_purple("❌ Authorization Failed. Common causes:")
+                    self.log_msg_purple("   1. Invalid storage account key")
+                    self.log_msg_purple("   2. Key does not have sufficient permissions")
+                    self.log_msg_purple("   3. Account name and key mismatch")
+                raise Exception(f"Authentication failed: {error_message}")
             
-            # Create the blob service client from the SAS URL
-            blob_service_client = BlobServiceClient(blob_sas_url)
+            self.log_msg_purple(f"Accessing container '{container_name}'...")
             container_client = blob_service_client.get_container_client(container_name)
+            self.log_msg_green("✓ Successfully connected to container")
             
             # Ensure target directory exists
             target_dir.mkdir(parents=True, exist_ok=True)
             
             # Get list of existing local files and their sizes
+            self.log_msg_purple("Scanning local directory for existing files...")
             local_files = {}
+            total_local_size = 0
             for file_path in target_dir.glob('*'):
                 if file_path.is_file():
-                    local_files[file_path.name] = file_path.stat().st_size
+                    file_size = file_path.stat().st_size
+                    local_files[file_path.name] = file_size
+                    total_local_size += file_size
             
             self.log_msg_purple(f"Found {len(local_files)} existing local files")
+            self.log_msg_purple(f"Total local storage used: {total_local_size / (1024*1024):.2f} MB")
             
             # List all blobs in the container
+            self.log_msg_purple("Retrieving blob list from Azure Storage...")
             blob_list = list(container_client.list_blobs())
+            total_blob_size = sum(blob.size for blob in blob_list)
             self.log_msg_purple(f"Found {len(blob_list)} files in blob storage")
+            self.log_msg_purple(f"Total blob storage size: {total_blob_size / (1024*1024):.2f} MB")
             
             # Compare and download only new or updated files
             for blob in blob_list:
@@ -238,23 +284,41 @@ class Utilities:
                     target_path = target_dir / blob.name
                     should_download = False
                     
+                    # Check file status
                     if blob.name not in local_files:
-                        self.log_msg_purple(f"New file found: {blob.name}")
+                        self.log_msg_purple(f"📄 New file detected: {blob.name}")
+                        self.log_msg_purple(f"   Size: {blob.size / 1024:.2f} KB")
                         should_download = True
                     elif local_files[blob.name] != blob.size:
-                        self.log_msg_purple(f"Updated file found: {blob.name}")
+                        self.log_msg_purple(f"🔄 File update detected: {blob.name}")
+                        self.log_msg_purple(f"   Current size: {local_files[blob.name] / 1024:.2f} KB")
+                        self.log_msg_purple(f"   New size: {blob.size / 1024:.2f} KB")
                         should_download = True
                     
                     if should_download:
-                        self.log_msg_purple(f"Downloading: {blob.name}")
+                        self.log_msg_purple(f"⬇️  Downloading: {blob.name}")
+                        self.log_msg_purple(f"   Destination: {target_path}")
+                        self.log_msg_purple(f"   Size: {blob.size / 1024:.2f} KB")
+                        
+                        # Track download progress
+                        start_time = time.time()
                         blob_client = container_client.get_blob_client(blob.name)
+                        
                         with open(target_path, "wb") as file:
                             data = blob_client.download_blob()
                             file.write(data.readall())
+                            
+                        end_time = time.time()
+                        duration = end_time - start_time
+                        speed = (blob.size / 1024 / 1024) / duration  # MB/s
+                        
                         downloaded_files.append(target_path)
-                        self.log_msg_green(f"Successfully downloaded: {target_path}")
+                        self.log_msg_green(f"✅ Successfully downloaded: {target_path}")
+                        self.log_msg_green(f"   Duration: {duration:.2f} seconds")
+                        self.log_msg_green(f"   Speed: {speed:.2f} MB/s")
                     else:
-                        self.log_msg_purple(f"Skipping unchanged file: {blob.name}")
+                        self.log_msg_purple(f"⏭️  Skipping unchanged file: {blob.name}")
+                        self.log_msg_purple(f"   Size: {blob.size / 1024:.2f} KB")
                     
                 except Exception as blob_error:
                     self.log_msg_purple(f"Error processing blob {blob.name}: {str(blob_error)}")
