@@ -1,0 +1,21 @@
+:root{
+  --primary:#0b5a7c;
+  --accent:#6fbf73;
+  --bg:#f8fbfc;
+  --panel:#ffffff;
+  --muted:#666;
+}
+body{font-family: Arial, Helvetica, sans-serif; background:var(--bg); color:#222; margin:0}
+.banner{background:var(--primary); color:white; padding:24px}
+.banner h1{margin:0; font-size:1.6rem}
+.banner p{margin:4px 0 0; color:rgba(255,255,255,0.85)}
+.container{max-width:980px; margin:24px auto; padding:0 16px}
+.panel{background:var(--panel); border-radius:8px; padding:18px; box-shadow:0 2px 6px rgba(0,0,0,0.06)}
+.panel h2{margin-top:0}
+.actions{margin-top:12px}
+.btn{display:inline-block; padding:10px 14px; border-radius:6px; border:1px solid #ddd; background:white; color:var(--primary); text-decoration:none}
+.btn.primary{background:var(--primary); color:white; border:none}
+.footer{padding:8px 16px; color:var(--muted); text-align:center; margin-top:16px}
+.summary{white-space:pre-wrap}
+.note{background:#fff3cd; padding:8px; border-radius:6px; color:#856404}
+.hint{color:var(--muted); font-size:0.9rem}

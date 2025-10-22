@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bayer Compliance Manager — Web UI</title>
+    <link rel="stylesheet" href="/static/web_ui.css">
+  </head>
+  <body>
+    <header class="banner">
+      <h1>Bayer Compliance Manager</h1>
+      <p>Authoritative research and compliance reporting — data protection & regulations</p>
+    </header>
+
+    <main class="container">
+      <section class="panel">
+        <h2>Select a category</h2>
+        <form action="/search" method="post">
+          <label for="category">Category</label>
+          <select id="category" name="category">
+            {% for c in categories %}
+            <option value="{{c}}">{{c}}</option>
+            {% endfor %}
+          </select>
+
+          <label for="jurisdiction">Jurisdiction (optional)</label>
+          <input id="jurisdiction" name="jurisdiction" placeholder="e.g., European Union">
+
+          <div class="actions">
+            <button class="btn primary" type="submit">Search updates</button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <footer class="footer">Bayer — Compliance Manager</footer>
+  </body>
+  </html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Contoso Sales AI Agent</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <!-- Fluent UI Web Components CDN -->
+    <script type="module" src="https://unpkg.com/@fluentui/web-components@2.0.0/dist/fast-components.min.js"></script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="width:46px;height:46px;border-radius:10px;background:linear-gradient(180deg,var(--primary),var(--accent));display:flex;align-items:center;justify-content:center;color:white;font-weight:700">CA</div>
+          <div>
+            <h1>Contoso Sales AI Agent</h1>
+            <p class="subtitle">Ask about sales, products or trends — get charts and answers.</p>
+          </div>
+        </div>
+      </header>
+
+      <section class="controls">
+        <textarea id="query" placeholder="Enter your question about sales data..."></textarea>
+        <div class="actions">
+          <button id="startBtn" class="primary">Start Agent</button>
+          <button id="submitBtn" class="primary disabled">Submit</button>
+          <button id="stopBtn" class="secondary">Stop Agent</button>
+        </div>
+      </section>
+
+      <section class="responses">
+        <h2>Agent Responses</h2>
+        <div id="responsesArea" class="card">Ready.</div>
+        <div id="chartArea" class="card" style="margin-top:12px; display:none;">
+          <canvas id="resultsChart" style="max-height:300px;"></canvas>
+        </div>
+      </section>
+
+      <footer>
+        <small>Built with Fluent UI and Azure AI</small>
+      </footer>
+    </main>
+
+    <script>
+      const startBtn = document.getElementById('startBtn');
+      const submitBtn = document.getElementById('submitBtn');
+      const stopBtn = document.getElementById('stopBtn');
+      const queryEl = document.getElementById('query');
+      const responsesArea = document.getElementById('responsesArea');
+
+      async function apiFetch(path, method='GET', body=null) {
+        const res = await fetch(path, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        // Try to return HTML if the endpoint returned it
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('text/html')) {
+          const text = await res.text();
+          return { html: text };
+        }
+        try {
+          const json = await res.json();
+          return { json };
+        } catch (e) {
+          const text = await res.text();
+          return { html: text };
+        }
+      }
+
+      // Parse a pipe-table block anywhere in text. Returns { preText, headers, rows } or null.
+      function parsePipeTableFromText(text) {
+        const lines = text.split('\n');
+        let start = -1, end = -1;
+
+        // Find contiguous block of lines that contain at least two pipes
+        for (let i = 0; i < lines.length; i++) {
+          const l = lines[i].trim();
+          if ((l.match(/\|/g) || []).length >= 2) {
+            if (start === -1) start = i;
+            end = i;
+          } else {
+            if (start !== -1) break;
+          }
+        }
+        if (start === -1 || end - start < 1) return null;
+
+        const tableLines = lines.slice(start, end + 1).map(l => l.trim());
+
+        // Remove separator line like |---|----|
+        const filtered = tableLines.filter(l => !/^\|?\s*[:-]+[-| :]*$/.test(l));
+        if (filtered.length < 2) return null;
+
+        const rows = filtered.map(line => {
+          const parts = line.split('|');
+          // remove empty leading/trailing segments if present
+          if (parts.length > 0 && parts[0].trim() === '') parts.shift();
+          if (parts.length > 0 && parts[parts.length - 1].trim() === '') parts.pop();
+          return parts.map(p => p.trim());
+        });
+
+        const headers = rows[0];
+        const dataRows = rows.slice(1).map(r => r.map(cell => cell));
+
+        // preText is text before the table block
+        const preText = lines.slice(0, start).join('\n').trim();
+        return { preText, headers, rows: dataRows };
+      }
+
+      function buildHtmlTable(parsed) {
+        const table = document.createElement('table');
+        table.className = 'data-table';
+        const thead = document.createElement('thead');
+        const thr = document.createElement('tr');
+        parsed.headers.forEach(h => { const th = document.createElement('th'); th.innerHTML = h; thr.appendChild(th); });
+        thead.appendChild(thr);
+        table.appendChild(thead);
+        const tbody = document.createElement('tbody');
+        parsed.rows.forEach(r => {
+          const tr = document.createElement('tr');
+          r.forEach(c => {
+            const td = document.createElement('td');
+            td.textContent = c;
+            // Right-align numeric-like cells
+            if (c && c.replace(/[,$\s]/g, '').match(/^[-+]?\d+(?:\.\d+)?$/)) {
+              td.classList.add('numeric');
+            }
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        return table;
+      }
+
+      let chartInstance = null;
+      function renderChartFromParsed(parsed) {
+        // Heuristic: first column = labels, find first numeric column for values
+        const labels = parsed.rows.map(r => r[0]);
+        let valueCol = -1;
+        for (let col = 1; col < parsed.headers.length; col++) {
+          const allNumeric = parsed.rows.every(r => r[col] && r[col].replace(/[,$\s]/g, '').match(/^[-+]?\d+(?:\.\d+)?$/));
+          if (allNumeric) { valueCol = col; break; }
+        }
+        if (valueCol === -1) return false;
+        const data = parsed.rows.map(r => Number(r[valueCol].replace(/[^0-9.-]+/g, '')));
+        const ctx = document.getElementById('resultsChart').getContext('2d');
+        const chartData = {
+          labels,
+          datasets: [{
+            label: parsed.headers[valueCol],
+            data,
+            backgroundColor: labels.map((_,i) => `hsl(${(i*45)%360} 70% 60%)`),
+          }]
+        };
+        if (chartInstance) {
+          chartInstance.data = chartData;
+          chartInstance.update();
+        } else {
+          chartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: chartData,
+            options: { responsive: true, maintainAspectRatio: false }
+          });
+        }
+        return true;
+      }
+
+      function processResponseHTML(html) {
+        // Parse HTML and extract text for table detection
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+  // Use innerText to preserve line breaks when markdown tables are wrapped in <p> tags
+  const text = doc.body.innerText || doc.body.textContent || '';
+        const parsed = parsePipeTableFromText(text);
+        const chartArea = document.getElementById('chartArea');
+        if (parsed) {
+          // Insert any narrative text before the table
+          responsesArea.innerHTML = '';
+          if (parsed.preText) {
+            const p = document.createElement('div');
+            p.className = 'narrative';
+            p.textContent = parsed.preText;
+            responsesArea.appendChild(p);
+          }
+
+          // Build nicely formatted table and chart
+          const tableEl = buildHtmlTable(parsed);
+          responsesArea.appendChild(tableEl);
+          const didChart = renderChartFromParsed(parsed);
+          if (didChart) {
+            chartArea.style.display = 'block';
+          } else {
+            chartArea.style.display = 'none';
+          }
+        } else {
+          // no table detected: just render HTML as-is
+          responsesArea.innerHTML = html;
+          chartArea.style.display = 'none';
+        }
+      }
+
+      startBtn.addEventListener('click', async () => {
+        startBtn.disabled = true;
+        responsesArea.innerHTML = '<em>Starting agent...</em>';
+        const res = await apiFetch('/api/start', 'POST');
+        if (res.html) {
+          responsesArea.innerHTML = res.html;
+          submitBtn.classList.remove('disabled');
+          submitBtn.disabled = false;
+        } else if (res.json && res.json.status === 'ok') {
+          responsesArea.innerHTML = '<div class="ok">Agent started. You can submit queries.</div>';
+          submitBtn.classList.remove('disabled');
+          submitBtn.disabled = false;
+        } else {
+          const msg = res.json ? res.json.message : 'Unknown error';
+          responsesArea.textContent = 'Error starting agent: ' + msg;
+          startBtn.disabled = false;
+        }
+      });
+
+      submitBtn.addEventListener('click', async () => {
+        const q = queryEl.value.trim();
+        if (!q) return;
+        responsesArea.innerHTML = '<em>Sending query...</em>';
+        submitBtn.disabled = true;
+        const res = await apiFetch('/api/query', 'POST', { query: q });
+        if (res.html) {
+          processResponseHTML(res.html);
+        } else if (res.json && res.json.status === 'ok') {
+          // response may be HTML or plain text
+          const text = res.json.response || '';
+          processResponseHTML(text);
+        } else {
+          const msg = res.json ? res.json.message : 'Unknown error';
+          responsesArea.textContent = 'Error: ' + msg;
+        }
+        submitBtn.disabled = false;
+      });
+
+      stopBtn.addEventListener('click', async () => {
+        responsesArea.innerHTML = '<em>Stopping agent...</em>';
+        const res = await apiFetch('/api/stop', 'POST');
+        if (res.html) {
+          responsesArea.innerHTML = res.html;
+          startBtn.disabled = false;
+          submitBtn.classList.add('disabled');
+          submitBtn.disabled = true;
+        } else if (res.json && res.json.status === 'ok') {
+          responsesArea.innerHTML = '<div class="ok">Agent stopped.</div>';
+          startBtn.disabled = false;
+          submitBtn.classList.add('disabled');
+          submitBtn.disabled = true;
+        } else {
+          const msg = res.json ? res.json.message : 'Unknown error';
+          responsesArea.textContent = 'Error stopping agent: ' + msg;
+        }
+      });
+    </script>
+  </body>
+</html>

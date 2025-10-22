@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Results — {{category}}</title>
+    <link rel="stylesheet" href="/static/web_ui.css">
+  </head>
+  <body>
+    <header class="banner">
+      <h1>Results: {{category}}</h1>
+    </header>
+    <main class="container">
+      <section class="panel">
+        {% if updates.note %}
+          <div class="note">NOTE: {{ updates.note }}</div>
+        {% endif %}
+        <h3>Summary</h3>
+        <div class="summary">{{ updates.message_text }}</div>
+
+        {% if updates.citations %}
+        <h3>Citations</h3>
+        <ul>
+          {% for c in updates.citations %}
+            <li><a href="{{ c.url }}" target="_blank">{{ c.url }}</a></li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+
+        <form action="/refine" method="post">
+          <input type="hidden" name="category" value="{{ category }}">
+          <label for="refinement">Refine / add jurisdiction or timeframe</label>
+          <input id="refinement" name="refinement" placeholder="e.g., focus EU 2022-2024">
+          <div class="actions">
+            <button class="btn" type="submit">Refine</button>
+          </div>
+        </form>
+
+        <h3>Generate compliance report</h3>
+        <form action="/create_report" method="post">
+          <input type="hidden" name="category" value="{{ category }}">
+          <input type="hidden" name="jurisdiction" value="{{ jurisdiction }}">
+          <label for="controls_text">Controls to evaluate (edit or use defaults)</label>
+          <textarea id="controls_text" name="controls_text" rows="8">{{ default_controls }}</textarea>
+          <div class="actions">
+            <button class="btn primary" type="submit">Create report</button>
+          </div>
+        </form>
+
+        <p class="hint">Note: Reports are generated via the programmatic API. Confirm results before requesting a report.</p>
+      </section>
+    </main>
+
+    <footer class="footer">Bayer — Compliance Manager</footer>
+  </body>
+  </html>

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Confirm — {{category}}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='compliance_manager/web_ui.css') }}">
+  </head>
+  <body>
+    <header class="banner">
+      <h1>Confirm</h1>
+    </header>
+    <main class="container">
+      <section class="panel">
+        <p>Confirmation received for category: {{ category }}</p>
+        <p>You can request a full report from the API later.</p>
+      </section>
+    </main>
+    <footer class="footer">Bayer — Compliance Manager</footer>
+  </body>
+</html>
