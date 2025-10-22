@@ -7,7 +7,7 @@ from azure.ai.projects import AIProjectClient
 from azure.ai.agents.models import ThreadMessage
 from azure.storage.blob import BlobServiceClient, ContainerClient
 
-from terminal_colors import TerminalColors as tc
+from terminal_colorswh import TerminalColors as tc
 
 
 class Utilities:

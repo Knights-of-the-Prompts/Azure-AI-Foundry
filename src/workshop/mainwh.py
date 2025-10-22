@@ -18,8 +18,8 @@ from azure.ai.agents.models import (
 )
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
-from terminal_colors import TerminalColors as tc
-from utilities import Utilities
+from terminal_colorswh import TerminalColors as tc
+from utilitieswh import Utilities
 
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
@@ -71,9 +71,9 @@ except Exception as e:
 
 # Document search function is defined in setup_agent_tools
 
-INSTRUCTIONS_FILE = "instructions/instructions_function_calling.txt"
-# INSTRUCTIONS_FILE = "instructions/instructions_code_interpreter.txt"
-INSTRUCTIONS_FILE = "instructions/instructions_file_search.txt"
+INSTRUCTIONS_FILE = "instructions/instructions_function_callingwh.txt"
+# INSTRUCTIONS_FILE = "instructions/instructions_code_interpreterwh.txt"
+INSTRUCTIONS_FILE = "instructions/instructions_file_searchwh.txt"
 
 
 async def setup_agent_tools() -> AsyncToolSet:
@@ -81,6 +81,71 @@ async def setup_agent_tools() -> AsyncToolSet:
     agent_toolset = AsyncToolSet()
     
     try:
+        # Define document search function first
+        async def search_documents(search_term: str) -> str:
+            """
+            Search through documents in the datasheet folder.
+            
+            Args:
+                search_term: Text to search for in the documents.
+                
+            Returns:
+                JSON string with search results and matching files.
+            """
+            try:
+                # Use closure variable datasheet_dir
+                current_dir = Path(__file__).parent.resolve()
+                datasheet_dir = current_dir / "datasheet"
+                
+                # Validate we're only searching in datasheet directory
+                if not datasheet_dir.exists():
+                    return json.dumps({
+                        "status": "error",
+                        "error": "Datasheet directory not found",
+                        "search_term": search_term,
+                        "directory": str(datasheet_dir)
+                    })
+                    
+                # Check if we have any PDF files
+                pdf_files = list(datasheet_dir.glob("*.pdf"))
+                if not pdf_files:
+                    return json.dumps({
+                        "status": "error",
+                        "error": "No PDF documents found in datasheet directory",
+                        "search_term": search_term,
+                        "directory": str(datasheet_dir)
+                    })
+                    
+                print(f"\nSearching for: {search_term}")
+                print(f"Location: {datasheet_dir}")
+                print(f"Available documents: {len(pdf_files)}")
+                
+                # Perform the search
+                results = utilities.search_local_files(datasheet_dir, search_term)
+                
+                # Prepare detailed response
+                response = {
+                    "matches": len(results),
+                    "files": [str(p.name) for p in results],
+                    "search_term": search_term,
+                    "directory": str(datasheet_dir),
+                    "total_documents": len(pdf_files),
+                    "status": "success"
+                }
+                
+                if not results:
+                    response["suggestion"] = "Try different search terms or check document availability"
+                    
+                return json.dumps(response)
+                
+            except Exception as e:
+                return json.dumps({
+                    "status": "error",
+                    "error": str(e),
+                    "search_term": search_term,
+                    "directory": str(datasheet_dir)
+                })
+        
         # Set up datasheet directory path
         current_dir = Path(__file__).parent.resolve()
         datasheet_dir = current_dir / "datasheet"
@@ -160,65 +225,9 @@ async def setup_agent_tools() -> AsyncToolSet:
             print("   To enable blob storage sync, set AZURE_STORAGE_ACCOUNT and AZURE_AI environment variables")
             
             # Set up document search function
-            async def search_documents(search_term: str) -> str:
-                """
-                Search through documents in the datasheet folder.
-                
-                Args:
-                    search_term: Text to search for in the documents.
-                    
-                Returns:
-                    JSON string with search results and matching files.
-                """
-                try:
-                    # Validate we're only searching in datasheet directory
-                    if not datasheet_dir.exists():
-                        return json.dumps({
-                            "status": "error",
-                            "error": "Datasheet directory not found",
-                            "search_term": search_term,
-                            "directory": str(datasheet_dir)
-                        })
-                        
-                    # Check if we have any PDF files
-                    pdf_files = list(datasheet_dir.glob("*.pdf"))
-                    if not pdf_files:
-                        return json.dumps({
-                            "status": "error",
-                            "error": "No PDF documents found in datasheet directory",
-                            "search_term": search_term,
-                            "directory": str(datasheet_dir)
-                        })
-                        
-                    print(f"\nSearching for: {search_term}")
-                    print(f"Location: {datasheet_dir}")
-                    print(f"Available documents: {len(pdf_files)}")
-                    
-                    # Perform the search
-                    results = utilities.search_local_files(datasheet_dir, search_term)
-                    
-                    # Prepare detailed response
-                    response = {
-                        "matches": len(results),
-                        "files": [str(p.name) for p in results],
-                        "search_term": search_term,
-                        "directory": str(datasheet_dir),
-                        "total_documents": len(pdf_files),
-                        "status": "success"
-                    }
-                    
-                    if not results:
-                        response["suggestion"] = "Try different search terms or check document availability"
-                        
-                    return json.dumps(response)
-                    
-                except Exception as e:
-                    return json.dumps({
-                        "status": "error",
-                        "error": str(e),
-                        "search_term": search_term,
-                        "directory": str(datasheet_dir)
-                    })        # Add document search function to toolset
+            # Add document search function to toolset
+            toolset_functions = {search_documents}  # search_documents is now in scope
+            agent_toolset.add(AsyncFunctionTool(toolset_functions))        # Add document search function to toolset
         toolset_functions = {search_documents}
         agent_toolset.add(AsyncFunctionTool(toolset_functions))
         
