@@ -157,6 +157,128 @@ class Utilities:
         except Exception as e:
             print(f"Error handling file downloads: {e}")
 
+    def compare_with_master(self, directory: Path) -> tuple[bool, str]:
+        """
+        Compare files against the master roles document and identify faults.
+        
+        Args:
+            directory: Path to the directory containing the files to compare
+            
+        Returns:
+            tuple[bool, str]: (has_fault, error_message)
+        """
+        try:
+            # Find the master roles document (case-insensitive)
+            master_file = None
+            for file_path in directory.glob("*"):
+                if file_path.name.lower().startswith("roles"):
+                    master_file = file_path
+                    break
+            
+            if not master_file:
+                return True, "Master roles document not found in directory"
+                
+            # Get master document content
+            import pandas as pd
+            try:
+                master_df = pd.read_excel(str(master_file))
+                # Convert to string representation for comparison
+                master_content = master_df.to_string()
+            except Exception as e:
+                return True, f"Error reading master document: {str(e)}"
+                
+            # Compare other documents
+            faults = []
+            for file_path in directory.glob("*.xlsx"):  # Only process Excel files
+                if file_path == master_file:
+                    continue
+                    
+                try:
+                    current_df = pd.read_excel(str(file_path))
+                    current_content = current_df.to_string()
+                    
+                    # Focus on User ID and System differences
+                    if 'User ID' in master_df.columns and 'System' in master_df.columns:
+                        # Get user IDs that exist in both files
+                        if 'User ID' in current_df.columns and 'System' in current_df.columns:
+                            common_user_ids = set(master_df['User ID']) & set(current_df['User ID'])
+                            
+                            for user_id in common_user_ids:
+                                master_system = master_df[master_df['User ID'] == user_id]['System'].iloc[0]
+                                current_system = current_df[current_df['User ID'] == user_id]['System'].iloc[0]
+                                
+                                # Report if the system values differ
+                                if pd.notna(current_system) and pd.notna(master_system) and master_system != current_system:
+                                    # Get the user's name and role from master document
+                                    user_name = master_df[master_df['User ID'] == user_id]['Name'].iloc[0] if 'Name' in master_df.columns else 'Unknown Name'
+                                    master_role = master_df[master_df['User ID'] == user_id]['Role'].iloc[0] if 'Role' in master_df.columns else 'Unknown Role'
+                                    fault_msg = f"User ID {user_id} - {user_name} (Role: {master_role}) has different system values:\n  - In master: {master_system}\n  - In {file_path.name}: {current_system}"
+                                    faults.append(fault_msg)
+                        
+                except Exception as e:
+                    faults.append(f"Error processing {file_path.name}: {str(e)}")
+            
+            if faults:
+                # Create error summary file
+                error_summary = "\n".join([
+                    "System Value Discrepancy Report",
+                    "============================",
+                    f"Master Document: {master_file.name}",
+                    f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                    "",
+                    "Users with System Differences:",
+                    "---------------------------"
+                ] + [f"{fault}" for fault in faults])
+                
+                # Ensure the directory exists
+                directory.mkdir(parents=True, exist_ok=True)
+                
+                error_file = directory / "error.txt"
+                
+                # Check if we need to update error.txt
+                should_update = True
+                if error_file.exists():
+                    try:
+                        existing_content = error_file.read_text(encoding='utf-8')
+                        # Compare everything except the timestamp line
+                        new_lines = error_summary.splitlines()
+                        old_lines = existing_content.splitlines()
+                        
+                        # Remove the date line (index 3) from both for comparison
+                        new_without_date = new_lines[:3] + new_lines[4:]
+                        old_without_date = old_lines[:3] + old_lines[4:]
+                        
+                        if new_without_date == old_without_date:
+                            should_update = False
+                            self.log_msg_purple("No changes in discrepancies, keeping existing error report")
+                    except Exception:
+                        # If there's any error reading the existing file, we'll update it
+                        pass
+                
+                if should_update:
+                    try:
+                        error_file.write_text(error_summary, encoding='utf-8')
+                        self.log_msg_purple(f"Error report updated with new discrepancies")
+                        
+                        # Clean up Excel files after successful error report update
+                        for xlsx_file in directory.glob("*.xlsx"):
+                            try:
+                                xlsx_file.unlink()
+                                self.log_msg_purple(f"Cleaned up: {xlsx_file.name}")
+                            except Exception as e:
+                                self.log_msg_purple(f"Error removing {xlsx_file.name}: {e}")
+                                
+                    except Exception as e:
+                        self.log_msg_purple(f"Error writing error.txt: {str(e)}")
+                        return True, f"Found {len(faults)} faults but could not write error.txt: {str(e)}"
+                
+                return True, f"Found {len(faults)} faults. Details written to error.txt"
+            
+            return False, "No faults detected"
+            
+        except Exception as e:
+            return True, f"Error during comparison: {str(e)}"
+
     def search_local_files(self, directory: Path, search_term: str) -> list[Path]:
         """Search for files in the local directory using a search term."""
         self.log_msg_purple(f"Searching in {directory} for: {search_term}")
@@ -198,62 +320,49 @@ class Utilities:
             self.log_msg_purple(f"Error during search: {str(e)}")
             return []
 
-    def download_from_blob_storage(self, storage_account_name: str, storage_key: str, container_name: str, target_dir: Path) -> list[Path]:
-        """Download new or updated files from Azure Blob Storage using storage account credentials."""
+    def download_from_blob_storage(self, storage_account_name: str, sas_token: str, container_name: str, target_dir: Path) -> list[Path]:
+        """Download new or updated files from Azure Blob Storage using SAS token."""
         self.log_msg_purple(f"=== Starting Azure Blob Storage Synchronization ===")
         
         # Validate inputs
         if not storage_account_name or not storage_account_name.strip():
             raise ValueError("Storage account name cannot be empty")
-        if not storage_key or not storage_key.strip():
-            raise ValueError("Storage account key cannot be empty")
+        if not sas_token or not sas_token.strip():
+            raise ValueError("SAS token cannot be empty")
         if not container_name or not container_name.strip():
             raise ValueError("Container name cannot be empty")
             
-        # Log configuration (mask storage key for security)
+        # Log configuration
         self.log_msg_purple(f"Storage Account: {storage_account_name}")
         self.log_msg_purple(f"Container: {container_name}")
         self.log_msg_purple(f"Target Directory: {target_dir}")
-        self.log_msg_purple(f"Key Length: {len(storage_key)} characters")
         downloaded_files = []
         
         try:
-            # Construct the account URL
-            account_url = f"https://{storage_account_name}.blob.core.windows.net"
-            self.log_msg_purple(f"Establishing connection to Azure Storage account...")
-            self.log_msg_purple(f"Account URL: {account_url}")
-            
-            # Validate storage key format (basic check)
-            if len(storage_key) < 64 or '==' not in storage_key:
-                self.log_msg_purple("⚠️  Warning: Storage key format might be invalid")
-                self.log_msg_purple("    Expected format: Base64 encoded key ending with '=='")
+            # Construct the account URL with SAS token
+            container_url = f"https://{storage_account_name}.blob.core.windows.net/{container_name}?{sas_token}"
+            self.log_msg_purple(f"Establishing connection to Azure Storage container...")
             
             try:
-                # Create the blob service client using account key
-                self.log_msg_purple("Initializing Blob Service Client...")
-                blob_service_client = BlobServiceClient(
-                    account_url=account_url,
-                    credential=storage_key
-                )
+                # Create the container client using container URL with SAS
+                self.log_msg_purple("Initializing Container Client...")
+                container_client = ContainerClient.from_container_url(container_url)
                 
-                # Test connection with a simple operation
+                # Test connection
                 self.log_msg_purple("Testing connection...")
-                account_info = blob_service_client.get_account_information()
-                self.log_msg_green("✓ Successfully connected to Azure Storage account")
-                self.log_msg_purple(f"Account SKU: {account_info['sku_name']}")
+                list(container_client.list_blobs())[0:1]  # Try to list first blob
+                self.log_msg_green("✓ Successfully connected to container")
                 
             except Exception as auth_error:
                 error_message = str(auth_error)
                 if "AuthorizationFailure" in error_message:
                     self.log_msg_purple("❌ Authorization Failed. Common causes:")
-                    self.log_msg_purple("   1. Invalid storage account key")
-                    self.log_msg_purple("   2. Key does not have sufficient permissions")
-                    self.log_msg_purple("   3. Account name and key mismatch")
+                    self.log_msg_purple("   1. Invalid SAS token")
+                    self.log_msg_purple("   2. Token does not have sufficient permissions")
+                    self.log_msg_purple("   3. Token has expired")
                 raise Exception(f"Authentication failed: {error_message}")
             
             self.log_msg_purple(f"Accessing container '{container_name}'...")
-            container_client = blob_service_client.get_container_client(container_name)
-            self.log_msg_green("✓ Successfully connected to container")
             
             # Ensure target directory exists
             target_dir.mkdir(parents=True, exist_ok=True)

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import sys
 import time
 
 from azure.ai.projects import AIProjectClient
@@ -244,58 +245,87 @@ async def setup_agent_tools() -> AsyncToolSet:
     pass
 
 
-async def initialize() -> tuple[Agent, AgentThread]:
-    """Initialize the agent with document search capabilities."""
-    agent = None
-    thread = None
-
-    try:
-        # Get the current script's directory and resolve the instructions file path
-        current_dir = Path(__file__).parent.resolve()
-        instructions_path = current_dir / INSTRUCTIONS_FILE
-        print(f"Looking for instructions file at: {instructions_path}")
+def check_system_discrepancies():
+    """Check for system value discrepancies in the datasheet directory."""
+    datasheet_dir = Path(__file__).parent / "datasheet"
+    
+    # Ensure datasheet directory exists
+    datasheet_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Sync with storage container first
+    storage_account = os.getenv("STORAGE_ACCOUNT_NAME")
+    sas_token = os.getenv("STORAGE_SAS_TOKEN")
+    container_name = os.getenv("STORAGE_CONTAINER_NAME")
+    
+    if not all([storage_account, sas_token, container_name]):
+        print("\nMissing storage configuration! Please check .env file for:")
+        print("- STORAGE_ACCOUNT_NAME")
+        print("- STORAGE_SAS_TOKEN")
+        print("- STORAGE_CONTAINER_NAME")
+        return
+    
+    print("\nSyncing with storage container...")
+    downloaded = utilities.download_from_blob_storage(storage_account, sas_token, container_name, datasheet_dir)
+    if not downloaded:
+        print("No files downloaded from storage!")
+        return
         
-        with open(instructions_path, "r", encoding="utf-8", errors="ignore") as file:
-            instructions = file.read()
+    # List files in directory for debugging
+    print("\nChecking contents of datasheet directory:")
+    files = list(datasheet_dir.glob('*.xlsx'))
+    if not files:
+        print("No Excel files found in datasheet directory!")
+        return
+    
+    print("Found Excel files:", [f.name for f in files])
+    
+    has_fault, message = utilities.compare_with_master(datasheet_dir)
+    if has_fault:
+        print("\nSystem Discrepancy Check:", message)
+        
+        # Verify error.txt was created
+        error_file = datasheet_dir / "error.txt"
+        if error_file.exists():
+            print(f"Error report created at: {error_file}")
+        else:
+            print("Warning: error.txt was not created!")
+    else:
+        print("\nSystem Discrepancy Check: All system values match")
 
-        # Replace the current date placeholder
-        instructions = instructions.replace("{current_date}", date.today().strftime("%Y-%m-%d"))
-
-        # Set up all agent tools including document search
-        toolset = await setup_agent_tools()
-
-        # Create agent and thread without closing the context manager
-        print("Creating agent...")
+async def initialize() -> tuple[Agent, AgentThread]:
+    """Initialize the agent by checking the project and agent credentials."""
+    try:
+        # Run system discrepancy check at startup
+        check_system_discrepancies()
+        
+        # Create an agent for the session
         agent = project_client.agents.create_agent(
+            name="CustomGPT",
+            description="A custom GPT agent for file search.",
+            instructions="You are a helpful AI assistant.",
             model=API_DEPLOYMENT_NAME,
-            name="company-data-agent",
-            instructions=instructions,
-            toolset=toolset,
-            temperature=TEMPERATURE,
-            headers={"x-ms-enable-preview": "true"},
+            tools=[]
         )
-        print(f"Created agent, ID: {agent.id}")
+        print(f"Created new agent: {agent.id}")
 
-        # Create thread
-        print("Creating thread...")
+        # Create a thread
         thread = project_client.agents.threads.create()
-        print(f"Created thread, ID: {thread.id}")
+        print(f"Created thread: {thread.id}")
 
         return agent, thread
-
+            
     except Exception as e:
-        logger.error("An error occurred initializing the agent: %s", str(e))
-        logger.error("Please ensure you've enabled an instructions file.")
+        print(f"Error during initialization: {e}")
         raise
 
-
 async def cleanup(agent: Agent, thread: AgentThread) -> None:
-    """Cleanup the resources."""
+    """Cleanup the agent resources."""
     try:
+        # Clean up agent
         project_client.agents.delete_agent(agent.id)
         print(f"Deleted agent: {agent.id}")
     except Exception as e:
-        print(f"Error deleting agent: {e}")
+        print(f"Error during cleanup: {e}")
 
 
 async def post_message(thread_id: str, content: str, agent: Agent, thread: AgentThread) -> None:
@@ -462,6 +492,60 @@ async def post_message(thread_id: str, content: str, agent: Agent, thread: Agent
         traceback.print_exc()
 
 
+async def check_for_updates():
+    """Check for new files and run comparison."""
+    print("\n" + "="*50)
+    print("Starting scheduled update check...")
+    print("="*50)
+    
+    datasheet_dir = Path(__file__).parent / "datasheet"
+    print(f"Checking directory: {datasheet_dir}")
+    
+    # Sync with storage container
+    storage_account = os.getenv("STORAGE_ACCOUNT_NAME")
+    storage_key = os.getenv("STORAGE_SAS_TOKEN")
+    container_name = os.getenv("STORAGE_CONTAINER_NAME")
+    
+    if not all([storage_account, storage_key, container_name]):
+        print("❌ Missing storage configuration!")
+        return
+    
+    print("\n📥 Checking storage for new files...")
+    downloaded = utilities.download_from_blob_storage(storage_account, storage_key, container_name, datasheet_dir)
+    
+    if downloaded:
+        print("\n🔍 Running comparison check...")
+        has_fault, message = utilities.compare_with_master(datasheet_dir)
+        if has_fault:
+            print(f"\n⚠️  System Discrepancy Check: {message}")
+        else:
+            print("\n✅ System Discrepancy Check: No faults detected")
+    else:
+        print("\n✅ No new files to process")
+    
+    print("\n" + "="*50)
+    print("Update check complete.")
+    print("="*50 + "\n")
+
+async def periodic_check(interval: int = 60):
+    """Run periodic checks at specified interval."""
+    try:
+        while True:
+            print(f"\nScheduling next check in {interval} seconds...")
+            await asyncio.sleep(interval)
+            await check_for_updates()
+    except asyncio.CancelledError:
+        print("\nPeriodic check stopped.")
+        raise  # Re-raise to ensure proper cleanup
+        await check_for_updates()
+    except asyncio.CancelledError:
+        print("\nPeriodic check stopped.")
+
+async def input_async(prompt: str) -> str:
+    """Async wrapper for input() to allow other tasks to run."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, input, prompt)
+
 async def main() -> None:
     """
     Main function to run the agent.
@@ -470,21 +554,71 @@ async def main() -> None:
     # Use the project client within a context manager for the entire session
     with project_client:
         agent, thread = await initialize()
+        
+        # Start periodic check task
+        check_task = asyncio.create_task(periodic_check())
+        
+        try:
+            while True:
+                # Handle both user input and periodic checks concurrently
+                user_input_task = asyncio.create_task(
+                    input_async(f"\n{tc.GREEN}Enter your query (type exit to finish): {tc.RESET}")
+                )
+                
+                # Wait for either user input or the next check update
+                done, pending = await asyncio.wait(
+                    {user_input_task, check_task},
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                
+                # Handle completed tasks
+                for task in done:
+                    if task == user_input_task:
+                        prompt = task.result()
+                        if prompt.lower() == "exit":
+                            break  # Break the loop to allow cleanup
+                        if prompt:
+                            await post_message(agent=agent, thread_id=thread.id, content=prompt, thread=thread)
+                    
+                # Restart the check task if it completed
+                if check_task in done:
+                    check_task = asyncio.create_task(periodic_check())
+                
+        except KeyboardInterrupt:
+            print("\nShutting down...")
+        finally:
+            # Ensure proper cleanup
+            print("\nCleaning up...")
+            # Cancel the periodic check task
+            check_task.cancel()
+            try:
+                await check_task  # Wait for task to be cancelled
+            except asyncio.CancelledError:
+                pass
+            
+            # Final cleanup
+            await cleanup(agent, thread)
+            print("Cleanup complete.")
 
-        while True:
-            # Get user input prompt in the terminal using a pretty shade of green
-            print("\n")
-            prompt = input(f"{tc.GREEN}Enter your query (type exit to finish): {tc.RESET}")
-            if prompt.lower() == "exit":
-                break
-            if not prompt:
-                continue
-            await post_message(agent=agent, thread_id=thread.id, content=prompt, thread=thread)
 
-        await cleanup(agent, thread)
-
+def check_document_faults():
+    """Check for faults in documents compared to master roles file."""
+    utilities = Utilities()
+    datasheet_dir = Path(__file__).parent / "datasheet"
+    
+    # Ensure directory exists
+    if not datasheet_dir.exists():
+        print("Error: datasheet directory not found")
+        return
+        
+    has_fault, message = utilities.compare_with_master(datasheet_dir)
+    print(message)
 
 if __name__ == "__main__":
-    print("Starting async program...")
-    asyncio.run(main())
-    print("Program finished.")
+    # Allow running fault check directly
+    if len(sys.argv) > 1 and sys.argv[1] == "--check-faults":
+        check_document_faults()
+    else:
+        print("Starting async program...")
+        asyncio.run(main())
+        print("Program finished.")
