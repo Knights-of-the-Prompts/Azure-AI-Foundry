@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-TENTS_DATA_SHEET_FILE = Path("datasheet/contoso-tents-datasheet.pdf")
+# TENTS_DATA_SHEET_FILE = Path("datasheet/contoso-tents-datasheet.pdf")
 API_DEPLOYMENT_NAME = os.getenv("AGENT_MODEL_DEPLOYMENT_NAME")
 PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
 AZURE_SUBSCRIPTION_ID = os.environ["AZURE_SUBSCRIPTION_ID"]
@@ -172,6 +172,7 @@ async def setup_agent_tools() -> AsyncToolSet:
         
         storage_account_name = os.getenv("AZURE_STORAGE_ACCOUNT", "").strip()
         storage_key = os.getenv("AZURE_AI", "").strip()
+        storage_connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "").strip()
         container_name = os.getenv("AZURE_CONTAINER_NAME", "datasheets").strip()
         
         # Detailed environment variable validation
@@ -180,6 +181,11 @@ async def setup_agent_tools() -> AsyncToolSet:
             env_status.append("❌ AZURE_STORAGE_ACCOUNT environment variable not found or empty")
         else:
             env_status.append(f"✓ AZURE_STORAGE_ACCOUNT: {storage_account_name}")
+        
+        if not storage_connection_string:
+            env_status.append("❌ AZURE_STORAGE_CONNECTION_STRING environment variable not found or empty")
+        else:
+            env_status.append("✓ AZURE_STORAGE_CONNECTION_STRING: [HIDDEN]")
             
         if not storage_key:
             env_status.append("❌ AZURE_AI environment variable not found or empty")
@@ -223,7 +229,7 @@ async def setup_agent_tools() -> AsyncToolSet:
         else:
             print("\n⚠️  Azure Storage credentials not found")
             print("   Will proceed with existing local files only")
-            print("   To enable blob storage sync, set AZURE_STORAGE_ACCOUNT and AZURE_AI environment variables")
+            print("   To enable blob storage sync, set AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_CONNECTION_STRING environment variables")
             
             # Set up document search function
             # Add document search function to toolset
@@ -300,7 +306,7 @@ async def initialize() -> tuple[Agent, AgentThread]:
         
         # Create an agent for the session
         agent = project_client.agents.create_agent(
-            name="CustomGPT",
+            name="isowatch-Workhorse-GPT",
             description="A custom GPT agent for file search.",
             instructions="You are a helpful AI assistant.",
             model=API_DEPLOYMENT_NAME,
@@ -537,9 +543,6 @@ async def periodic_check(interval: int = 60):
     except asyncio.CancelledError:
         print("\nPeriodic check stopped.")
         raise  # Re-raise to ensure proper cleanup
-        await check_for_updates()
-    except asyncio.CancelledError:
-        print("\nPeriodic check stopped.")
 
 async def input_async(prompt: str) -> str:
     """Async wrapper for input() to allow other tasks to run."""
@@ -565,31 +568,40 @@ async def main() -> None:
                     input_async(f"\n{tc.GREEN}Enter your query (type exit to finish): {tc.RESET}")
                 )
                 
-                # Wait for either user input or the next check update
-                done, pending = await asyncio.wait(
-                    {user_input_task, check_task},
-                    return_when=asyncio.FIRST_COMPLETED
-                )
-                
-                # Handle completed tasks
-                for task in done:
-                    if task == user_input_task:
-                        prompt = task.result()
-                        if prompt.lower() == "exit":
-                            break  # Break the loop to allow cleanup
-                        if prompt:
-                            await post_message(agent=agent, thread_id=thread.id, content=prompt, thread=thread)
+                try:
+                    # Wait for either user input or the next check update
+                    done, pending = await asyncio.wait(
+                        {user_input_task, check_task},
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
                     
-                # Restart the check task if it completed
-                if check_task in done:
-                    check_task = asyncio.create_task(periodic_check())
-                
+                    # Cancel any pending tasks we're not using anymore
+                    for task in pending:
+                        task.cancel()
+                    
+                    # Handle completed tasks
+                    for task in done:
+                        if task == user_input_task:
+                            prompt = task.result()
+                            if prompt.lower() == "exit":
+                                print("\nExiting...")
+                                return  # Exit the function to trigger cleanup
+                            if prompt:
+                                await post_message(agent=agent, thread_id=thread.id, content=prompt, thread=thread)
+                        
+                    # Restart the check task if it completed
+                    if check_task in done:
+                        check_task = asyncio.create_task(periodic_check())
+                        
+                except asyncio.CancelledError:
+                    break  # Break the loop if tasks are cancelled
+                    
         except KeyboardInterrupt:
             print("\nShutting down...")
         finally:
             # Ensure proper cleanup
             print("\nCleaning up...")
-            # Cancel the periodic check task
+            # Cancel all running tasks
             check_task.cancel()
             try:
                 await check_task  # Wait for task to be cancelled

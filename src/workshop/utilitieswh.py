@@ -267,6 +267,12 @@ class Utilities:
                                 self.log_msg_purple(f"Cleaned up: {xlsx_file.name}")
                             except Exception as e:
                                 self.log_msg_purple(f"Error removing {xlsx_file.name}: {e}")
+                        
+                        # Upload error.txt to blob storage after cleanup
+                        if self.upload_blob(error_file, "error"):
+                            self.log_msg_green("Successfully uploaded error.txt to blob storage")
+                        else:
+                            self.log_msg_purple("Failed to upload error.txt to blob storage")
                                 
                     except Exception as e:
                         self.log_msg_purple(f"Error writing error.txt: {str(e)}")
@@ -439,6 +445,105 @@ class Utilities:
         except Exception as e:
             self.log_msg_purple(f"Error accessing blob storage: {str(e)}")
             return downloaded_files
+            
+    def upload_blob(self, file_path: Path, blob_name: str) -> bool:
+        """Upload a file to blob storage with the specified name."""
+        try:
+            # Get connection string from environment
+            connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+            if not connection_string:
+                self.log_msg_purple("Missing storage connection string")
+                return False
+
+            # Create the BlobServiceClient
+            blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+            
+            # Get container name - use the same container as download
+            container_name = os.getenv("AZURE_CONTAINER_NAME", "datasheets")
+            
+            try:
+                # First try to get the container
+                container_client = blob_service_client.get_container_client(container_name)
+                try:
+                    # Check if container exists in a separate try block
+                    exists = container_client.exists()
+                    if not exists:
+                        self.log_msg_purple(f"Container {container_name} does not exist, creating it...")
+                        try:
+                            # Create container in a separate try block
+                            container_client = blob_service_client.create_container(container_name)
+                            self.log_msg_green(f"Created container {container_name}")
+                        except Exception as create_error:
+                            self.log_msg_purple(f"Error creating container: {str(create_error)}")
+                            # Check if it's a permission error
+                            if "AuthorizationFailure" in str(create_error):
+                                self.log_msg_purple("Please check your storage account permissions")
+                            return False
+                except Exception as exists_error:
+                    self.log_msg_purple(f"Error checking if container exists: {str(exists_error)}")
+                    return False
+            except Exception as container_error:
+                self.log_msg_purple(f"Error accessing container: {str(container_error)}")
+                # Check common error conditions
+                if "InvalidResourceName" in str(container_error):
+                    self.log_msg_purple(f"Invalid container name: {container_name}. Container names must be lowercase letters, numbers, and hyphens.")
+                elif "AuthenticationFailed" in str(container_error):
+                    self.log_msg_purple("Authentication failed. Please check your storage connection string.")
+                return False
+            
+            # Upload the file with detailed progress information
+            try:
+                # Check file exists and get size
+                try:
+                    file_size = file_path.stat().st_size
+                except Exception as file_error:
+                    self.log_msg_purple(f"Error accessing file {file_path}: {str(file_error)}")
+                    return False
+
+                self.log_msg_purple(f"\nPreparing to upload {file_path.name}:")
+                self.log_msg_purple(f"  • File size: {file_size / 1024:.2f} KB")
+                self.log_msg_purple(f"  • Destination: {container_name}/{blob_name}")
+                self.log_msg_purple(f"  • Overwrite if exists: Yes")
+                
+                start_time = time.time()
+                try:
+                    blob_client = container_client.get_blob_client(blob_name)
+                    
+                    try:
+                        with open(file_path, "rb") as data:
+                            self.log_msg_purple("Starting upload...")
+                            blob_client.upload_blob(data, overwrite=True)
+                    except Exception as upload_error:
+                        self.log_msg_purple(f"Error during file upload: {str(upload_error)}")
+                        if "MD5 validation failed" in str(upload_error):
+                            self.log_msg_purple("Upload failed validation check - possible corruption during transfer")
+                        elif "timeout" in str(upload_error).lower():
+                            self.log_msg_purple("Upload timed out - please check your network connection")
+                        return False
+                        
+                    end_time = time.time()
+                    duration = end_time - start_time
+                    speed = (file_size / 1024 / 1024) / duration if duration > 0 else 0  # MB/s
+                    
+                    self.log_msg_green("\nUpload completed successfully:")
+                    self.log_msg_green(f"  • Duration: {duration:.2f} seconds")
+                    self.log_msg_green(f"  • Speed: {speed:.2f} MB/s")
+                    self.log_msg_green(f"  • Blob URL: {blob_client.url}")
+                    
+                except Exception as blob_error:
+                    self.log_msg_purple(f"Error creating blob client: {str(blob_error)}")
+                    return False
+                    
+            except Exception as e:
+                self.log_msg_purple(f"Unexpected error during upload: {str(e)}")
+                return False
+                
+            self.log_msg_green(f"Successfully uploaded {file_path} to blob {blob_name}")
+            return True
+            
+        except Exception as e:
+            self.log_msg_purple(f"Error uploading blob: {str(e)}")
+            return False
             
     def sync_vector_store_files(self, project_client: AIProjectClient, vector_store_id: str, target_dir: Path) -> list[Path]:
         """Download and sync all files from a vector store to a local directory."""
