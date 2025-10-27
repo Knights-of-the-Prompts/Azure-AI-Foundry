@@ -218,69 +218,50 @@ class Utilities:
                 except Exception as e:
                     faults.append(f"Error processing {file_path.name}: {str(e)}")
             
-            if faults:
-                # Create error summary file
-                error_summary = "\n".join([
-                    "System Value Discrepancy Report",
-                    "============================",
-                    f"Master Document: {master_file.name}",
-                    f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}",
-                    "",
-                    "Users with System Differences:",
-                    "---------------------------"
-                ] + [f"{fault}" for fault in faults])
-                
-                # Ensure the directory exists
-                directory.mkdir(parents=True, exist_ok=True)
-                
-                error_file = directory / "error.txt"
-                
-                # Check if we need to update error.txt
-                should_update = True
-                if error_file.exists():
-                    try:
-                        existing_content = error_file.read_text(encoding='utf-8')
-                        # Compare everything except the timestamp line
-                        new_lines = error_summary.splitlines()
-                        old_lines = existing_content.splitlines()
-                        
-                        # Remove the date line (index 3) from both for comparison
-                        new_without_date = new_lines[:3] + new_lines[4:]
-                        old_without_date = old_lines[:3] + old_lines[4:]
-                        
-                        if new_without_date == old_without_date:
-                            should_update = False
-                            self.log_msg_purple("No changes in discrepancies, keeping existing error report")
-                    except Exception:
-                        # If there's any error reading the existing file, we'll update it
-                        pass
-                
-                if should_update:
-                    try:
-                        error_file.write_text(error_summary, encoding='utf-8')
-                        self.log_msg_purple(f"Error report updated with new discrepancies")
-                        
-                        # Clean up Excel files after successful error report update
-                        for xlsx_file in directory.glob("*.xlsx"):
-                            try:
-                                xlsx_file.unlink()
-                                self.log_msg_purple(f"Cleaned up: {xlsx_file.name}")
-                            except Exception as e:
-                                self.log_msg_purple(f"Error removing {xlsx_file.name}: {e}")
-                        
-                        # Upload error.txt to blob storage after cleanup
-                        if self.upload_blob(error_file, "error"):
-                            self.log_msg_green("Successfully uploaded error.txt to blob storage")
-                        else:
-                            self.log_msg_purple("Failed to upload error.txt to blob storage")
-                                
-                    except Exception as e:
-                        self.log_msg_purple(f"Error writing error.txt: {str(e)}")
-                        return True, f"Found {len(faults)} faults but could not write error.txt: {str(e)}"
-                
-                return True, f"Found {len(faults)} faults. Details written to error.txt"
+            # Always create error summary file
+            error_summary = "\n".join([
+                "System Value Discrepancy Report",
+                "============================",
+                f"Master Document: {master_file.name}",
+                f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                "",
+                "System Check Results:",
+                "---------------------------",
+                "Status: " + ("FAULTS DETECTED" if faults else "NO FAULTS"),
+                "",
+                "Details:",
+                "---------------------------"
+            ] + ([f"{fault}" for fault in faults] if faults else ["All system values match master document"]))
             
-            return False, "No faults detected"
+            # Ensure the directory exists
+            directory.mkdir(parents=True, exist_ok=True)
+            
+            error_file = directory / "error.txt"
+            
+            try:
+                # Always write the new error report
+                error_file.write_text(error_summary, encoding='utf-8')
+                self.log_msg_purple(f"Error report {'updated with discrepancies' if faults else 'created (no faults)'}")
+                
+                # Clean up Excel files after successful error report update
+                for xlsx_file in directory.glob("*.xlsx"):
+                    try:
+                        xlsx_file.unlink()
+                        self.log_msg_purple(f"Cleaned up: {xlsx_file.name}")
+                    except Exception as e:
+                        self.log_msg_purple(f"Error removing {xlsx_file.name}: {e}")
+                
+                # Always upload error.txt to blob storage
+                if self.upload_blob(error_file, "error"):
+                    self.log_msg_green("Successfully uploaded error.txt to blob storage")
+                else:
+                    self.log_msg_purple("Failed to upload error.txt to blob storage")
+                    
+            except Exception as e:
+                self.log_msg_purple(f"Error writing error.txt: {str(e)}")
+                return True, f"Error writing error.txt: {str(e)}"
+            
+            return bool(faults), f"{'Found ' + str(len(faults)) + ' faults' if faults else 'No faults detected'}. Details written to error.txt"
             
         except Exception as e:
             return True, f"Error during comparison: {str(e)}"

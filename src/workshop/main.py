@@ -2,6 +2,8 @@ import asyncio
 from datetime import date
 import logging
 import os
+import glob
+from pathlib import Path
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.agents import AgentsClient
@@ -25,13 +27,73 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-TENTS_DATA_SHEET_FILE = "datasheet/contoso-tents-datasheet.pdf"
 API_DEPLOYMENT_NAME = os.getenv("AGENT_MODEL_DEPLOYMENT_NAME")
 PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
 AZURE_SUBSCRIPTION_ID = os.environ["AZURE_SUBSCRIPTION_ID"]
 AZURE_RESOURCE_GROUP_NAME = os.environ["AZURE_RESOURCE_GROUP_NAME"]
 AZURE_PROJECT_NAME = os.environ["AZURE_PROJECT_NAME"]
 BING_CONNECTION_NAME = os.getenv("BING_CONNECTION_NAME")
+
+# Set up directory paths
+TEMPLATE_DIR = Path("template")
+CHANGE_DIR = Path("change")
+print("\n📁 Analyzing directory structure:")
+print(f"• Template directory path: {TEMPLATE_DIR.absolute()}")
+print(f"• Change directory path: {CHANGE_DIR.absolute()}")
+
+def analyze_directory(directory: Path, dir_name: str) -> list[Path]:
+    """Analyze directory contents and return list of Excel files."""
+    excel_files = []
+    
+    if directory.exists():
+        print(f"\n✓ {dir_name} directory exists")
+        print("\nDirectory contents:")
+        try:
+            # List all files and directories
+            for item in directory.iterdir():
+                if item.is_file():
+                    stats = item.stat()
+                    size_kb = stats.st_size / 1024
+                    modified = date.fromtimestamp(stats.st_mtime)
+                    print(f"📄 {item.name}")
+                    print(f"   - Type: File")
+                    print(f"   - Size: {size_kb:.1f} KB")
+                    print(f"   - Modified: {modified}")
+                    if item.suffix.lower() == '.xlsx':
+                        excel_files.append(item)
+                elif item.is_dir():
+                    items = list(item.iterdir())
+                    print(f"📂 {item.name}/")
+                    print(f"   - Type: Directory")
+                    print(f"   - Contains: {len(items)} items")
+                    # List contents of subdirectory
+                    for subitem in items:
+                        print(f"     └─ {subitem.name}")
+        except Exception as e:
+            print(f"Error reading directory contents: {e}")
+    else:
+        print(f"\n⚠️ {dir_name} directory does not exist")
+        print(f"• Creating directory: {directory.absolute()}")
+        directory.mkdir(exist_ok=True)
+        print("✓ Directory created successfully")
+    
+    return excel_files
+
+# Analyze template directory
+TEMPLATE_FILES = analyze_directory(TEMPLATE_DIR, "Template")
+
+print(f"\n📊 Excel files summary:")
+print(f"• Found {len(TEMPLATE_FILES)} Excel files in template directory")
+if TEMPLATE_FILES:
+    print("Files available for indexing:")
+    for file in TEMPLATE_FILES:
+        stats = file.stat()
+        print(f"  - {file.name}")
+        print(f"    Size: {stats.st_size / 1024:.1f} KB")
+        print(f"    Modified: {date.fromtimestamp(stats.st_mtime)}")
+else:
+    print("No Excel files found in template directory")
+
 MAX_COMPLETION_TOKENS = 4096
 MAX_PROMPT_TOKENS = 10240
 TEMPERATURE = 0.1
@@ -87,19 +149,46 @@ async def add_agent_tools():
     code_interpreter = CodeInterpreterTool()
     toolset.add(code_interpreter)
 
-    # Add file search tool if available
-    print("Creating vector store for file search...")
+    # Add file search tool and set up vector store
+    print("\nInitializing file search capability...")
     try:
-        vector_store = utilities.create_vector_store(
-            project_client,
-            files=[TENTS_DATA_SHEET_FILE],
-            vector_name_name="Contoso Product Information Vector Store",
-        )
-        file_search_tool = FileSearchTool(vector_store_ids=[vector_store.id])
-        toolset.add(file_search_tool)
-        print(f"File search tool added with vector store: {vector_store.id}")
+        if not TEMPLATE_FILES:
+            print("\n⚠️  Warning: No Excel files available for search indexing")
+            print("Please ensure Excel files are present in the template directory:")
+            print(f"→ Directory: {TEMPLATE_DIR.absolute()}")
+            print("Expected files:")
+            print("  • logs_table.xlsx - Contains logging information")
+            print("  • Roles_table.xlsx - Contains role definitions")
+            print("\nContinuing without file search capability...")
+        else:
+            print("\n🔍 Preparing files for search indexing:")
+            for file in TEMPLATE_FILES:
+                stats = file.stat()
+                print(f"• Processing {file.name}")
+                print(f"  - Size: {stats.st_size / 1024:.1f} KB")
+                print(f"  - Last modified: {date.fromtimestamp(stats.st_mtime)}")
+            
+            print("\n📑 Creating vector store for file search...")
+            # Create the vector store
+            try:
+                vector_store = utilities.create_vector_store(
+                    project_client=project_client,
+                    files=TEMPLATE_FILES,
+                    vector_name="Contoso Templates Vector Store"
+                )
+                print("✓ Vector store created successfully")
+            except Exception as ve:
+                print(f"Error creating vector store: {str(ve)}")
+                print("Continuing without file search capability...")
+                return toolset
+            
+            # Add file search tool
+            file_search_tool = FileSearchTool(vector_store_ids=[vector_store.id])
+            toolset.add(file_search_tool)
+            print(f"✓ File search tool added with vector store: {vector_store.id}")
+            
     except Exception as e:
-        print(f"Error creating file search tool: {e}")
+        print(f"Error setting up file search tool: {str(e)}")
         print("Continuing without file search capability...")
 
     return toolset
@@ -109,6 +198,23 @@ async def initialize() -> tuple[Agent, AgentThread]:
     """Initialize the agent with the sales data schema and instructions."""
     agent = None
     thread = None
+    
+    # Setup directories and copy template files
+    print("\n🔄 Setting up working directories...")
+    success, message = utilities.copy_template_files()
+    if not success:
+        print(f"Warning during template copy: {message}")
+        return None, None
+    else:
+        print(message)
+    
+    # Modify logs table in change directory and upload to blob
+    print("\n📝 Modifying and uploading logs table...")
+    success, message = utilities.modify_and_upload_logs()
+    if not success:
+        print(f"Warning during modification: {message}")
+    else:
+        print(message)
 
     await sales_data.connect()
     database_schema_string = await sales_data.get_database_info()
@@ -131,7 +237,7 @@ async def initialize() -> tuple[Agent, AgentThread]:
         print("Creating agent...")
         agent = project_client.agents.create_agent(
             model=API_DEPLOYMENT_NAME,
-            name="Contoso Sales AI Agent",
+            name="IsoWatch-Infrastructure-AI",
             instructions=instructions,
             toolset=toolset,
             temperature=TEMPERATURE,
@@ -301,7 +407,7 @@ async def post_message(thread_id: str, content: str, agent: Agent, thread: Agent
                 try:
                     import markdown as _md
                     html = _md.markdown(response_text)
-                except Exception:
+                except (ImportError, Exception):
                     html = f"<pre>{response_text}</pre>"
 
                 # Sanitize HTML to prevent XSS before returning to the client

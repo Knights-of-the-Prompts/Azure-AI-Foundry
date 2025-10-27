@@ -306,7 +306,7 @@ async def initialize() -> tuple[Agent, AgentThread]:
         
         # Create an agent for the session
         agent = project_client.agents.create_agent(
-            name="isowatch-Workhorse-GPT",
+            name="IsoWatch-Security-AI",
             description="A custom GPT agent for file search.",
             instructions="You are a helpful AI assistant.",
             model=API_DEPLOYMENT_NAME,
