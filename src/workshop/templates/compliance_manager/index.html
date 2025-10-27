@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bayer Compliance Manager — Web UI</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='compliance_manager/web_ui.css') }}">
+  </head>
+  <body>
+    <header class="banner">
+      <h1>Bayer Compliance Manager</h1>
+      <p>Authoritative research and compliance reporting — data protection & regulations</p>
+    </header>
+
+    <main class="container">
+      <section class="panel">
+        <h2>Select a category</h2>
+        <form action="/search" method="post">
+          <label for="category">Category</label>
+          <select id="category" name="category">
+            {% for c in categories %}
+            <option value="{{c}}">{{c}}</option>
+            {% endfor %}
+          </select>
+
+          <label for="jurisdiction">Jurisdiction (optional)</label>
+          <input id="jurisdiction" name="jurisdiction" placeholder="e.g., European Union">
+
+          <div class="actions">
+            <button class="btn primary" type="submit">Search updates</button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <footer class="footer">Bayer — Compliance Manager</footer>
+  </body>
+</html>

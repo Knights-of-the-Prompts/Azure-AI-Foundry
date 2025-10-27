@@ -166,3 +166,9 @@ cython_debug/
 
 # macOS Finder
 .DS_Store
+
+# project generated
+datasheet/
+
+
+

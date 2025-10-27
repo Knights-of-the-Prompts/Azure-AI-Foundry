@@ -1,13 +1,21 @@
 import os
 from pathlib import Path
+import random
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.agents.models import ThreadMessage
+from azure.storage.blob import BlobServiceClient
+import pandas as pd
 
 from terminal_colors import TerminalColors as tc
 
 
 class Utilities:
+    def __init__(self):
+        """Initialize the Utilities class with blob storage configuration."""
+        self.blob_connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+        self.container_name = os.getenv("BLOB_CONTAINER_NAME", "datasheets")
+        
     def log_msg_green(self, msg: str) -> None:
         """Print a message in green."""
         print(f"{tc.GREEN}{msg}{tc.RESET}")
@@ -15,6 +23,33 @@ class Utilities:
     def log_msg_purple(self, msg: str) -> None:
         """Print a message in purple."""
         print(f"{tc.PURPLE}{msg}{tc.RESET}")
+        
+    def upload_to_blob(self, local_file_path: Path, blob_name: str) -> bool:
+        """Upload a file to Azure Blob Storage."""
+        try:
+            if not self.blob_connection_string:
+                self.log_msg_purple("⚠️ AZURE_STORAGE_CONNECTION_STRING not set, skipping blob upload")
+                return False
+                
+            blob_service_client = BlobServiceClient.from_connection_string(self.blob_connection_string)
+            container_client = blob_service_client.get_container_client(self.container_name)
+            
+            # Create container if it doesn't exist
+            if not container_client.exists():
+                self.log_msg_purple(f"Creating container: {self.container_name}")
+                container_client.create_container()
+            
+            # Get blob client and upload the file
+            blob_client = container_client.get_blob_client(blob_name)
+            with open(local_file_path, "rb") as data:
+                blob_client.upload_blob(data, overwrite=True)
+                
+            self.log_msg_green(f"✓ Uploaded to blob storage: {blob_name}")
+            return True
+            
+        except Exception as e:
+            self.log_msg_purple(f"Error uploading to blob: {str(e)}")
+            return False
 
     def log_token_blue(self, msg: str) -> None:
         """Print a token in blue."""
@@ -61,6 +96,144 @@ class Utilities:
                 )
                 self.get_file(project_client, attachment.file_id, attachment_name)
 
+    def copy_template_files(self) -> tuple[bool, str]:
+        """Copy all files from template folder to change folder."""
+        try:
+            template_dir = Path("template")
+            change_dir = Path("change")
+            
+            # Check if template directory exists
+            if not template_dir.exists():
+                return False, "Template directory does not exist"
+                
+            # Create change directory
+            change_dir.mkdir(exist_ok=True)
+            
+            # Copy all files from template to change
+            files_copied = []
+            for file in template_dir.glob("*"):
+                if file.is_file():
+                    dest_file = change_dir / file.name
+                    with file.open("rb") as src, dest_file.open("wb") as dst:
+                        dst.write(src.read())
+                    files_copied.append(file.name)
+                    
+            if not files_copied:
+                return False, "No files found in template directory to copy"
+                
+            return True, f"Successfully copied {len(files_copied)} files to change directory"
+            
+        except Exception as e:
+            return False, f"Error copying template files: {str(e)}"
+
+    def modify_and_upload_logs(self) -> tuple[bool, str]:
+        """
+        Modify a random user's system in logs_table.xlsx using a system from Roles_table.xlsx.
+        First copies template files to change folder, then modifies the copy.
+        """
+        try:
+            # First copy template files to change directory
+            copy_success, copy_message = self.copy_template_files()
+            if not copy_success:
+                return False, copy_message
+            
+            # Set up paths using change directory instead of template
+            change_dir = Path("change")
+            logs_file = change_dir / "logs_table.xlsx"
+            roles_file = change_dir / "Roles_table.xlsx"
+
+            # Ensure change directory exists (should already exist from copy)
+            change_dir.mkdir(exist_ok=True)
+
+            # Check for required files
+            if not logs_file.exists() or not roles_file.exists():
+                return False, "Required Excel files not found in change directory. Please ensure files were copied correctly."
+            
+            # Read the files
+            try:
+                logs_df = pd.read_excel(logs_file)
+                roles_df = pd.read_excel(roles_file)
+            except Exception as e:
+                return False, f"Error reading Excel files: {str(e)}"
+                
+            if 'System' not in roles_df.columns or 'System' not in logs_df.columns:
+                return False, "Required 'System' column not found in Excel files"
+            
+            # Get available systems and randomly select one
+            available_systems = roles_df['System'].dropna().unique().tolist()
+            if not available_systems:
+                return False, "No systems found in Roles table"
+            new_system = random.choice(available_systems)
+            
+            # Select a random user and update their system
+            if len(logs_df) == 0:
+                return False, "Logs table is empty"
+                
+            random_index = random.randrange(len(logs_df))
+            old_system = logs_df.loc[random_index, 'System']
+            logs_df.loc[random_index, 'System'] = new_system
+            
+            # Save modified file to both directories
+            self.log_msg_purple("\nSaving modified files...")
+            
+            # Save to template directory (original location)
+            logs_df.to_excel(logs_file, index=False)
+            self.log_msg_purple(f"✓ Saved to template: {logs_file}")
+            
+            # Upload to blob storage
+            blob_upload_success = self.upload_to_blob(
+                local_file_path=logs_file,
+                blob_name="logs_table.xlsx"
+            )
+            
+            # Log the changes
+            self.log_msg_purple("\nModification Summary:")
+            self.log_msg_purple(f"• User Index: {random_index}")
+            self.log_msg_purple(f"• Old System: {old_system}")
+            self.log_msg_purple(f"• New System: {new_system}")
+            self.log_msg_purple(f"• Blob Upload: {'✓ Success' if blob_upload_success else '⚠️ Failed'}")
+            
+            return True, f"Successfully modified logs_table.xlsx with new system assignment{' and uploaded to blob' if blob_upload_success else ''}"
+            
+        except Exception as e:
+            return False, f"Error in modify_and_upload_logs: {str(e)}"
+    
+    def create_vector_store(self, project_client: AIProjectClient, files: list[Path], vector_name: str) -> None:
+        """Create a vector store from a list of files."""
+        try:
+            self.log_msg_green(f"Creating vector store: {vector_name}")
+            
+            # Upload files to the project
+            file_ids = []
+            for file_path in files:
+                if not file_path.exists():
+                    self.log_msg_purple(f"Warning: File not found: {file_path}")
+                    continue
+                    
+                self.log_msg_purple(f"Uploading {file_path.name}...")
+                with open(file_path, "rb") as f:
+                    response = project_client.agents.upload_file(f)
+                    file_ids.append(response.file_id)
+                    self.log_msg_green(f"Uploaded {file_path.name} with ID: {response.file_id}")
+            
+            if not file_ids:
+                raise ValueError("No files were successfully uploaded")
+            
+            # Create the vector store
+            vector_store = project_client.agents.create_vector_store(
+                name=vector_name,
+                file_ids=file_ids,
+            )
+            
+            self.log_msg_green(f"Successfully created vector store with ID: {vector_store.id}")
+            self.log_msg_green(f"Vector store contains {len(file_ids)} files")
+            
+            return vector_store
+            
+        except Exception as e:
+            self.log_msg_purple(f"Error creating vector store: {str(e)}")
+            raise
+            
     def download_agent_files(self, project_client: AIProjectClient, thread_id: str, downloads_dir: str = None) -> None:
         """Download all files generated by the agent (code interpreter, etc.)."""
         try:

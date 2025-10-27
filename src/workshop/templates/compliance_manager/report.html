@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Report — {{category}}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='compliance_manager/web_ui.css') }}">
+  </head>
+  <body>
+    <header class="banner">
+      <h1>Compliance Report: {{ category }}</h1>
+    </header>
+    <main class="container">
+      <section class="panel">
+        <h3>Summary</h3>
+        <pre>{{ report.report_json or report.evaluation_text }}</pre>
+
+        <h3>Citations</h3>
+        {% if report.evaluation_citations %}
+          <ul>
+            {% for c in report.evaluation_citations %}
+              <li><a href="{{ c.url }}">{{ c.url }}</a></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p>No evaluation citations were produced.</p>
+        {% endif %}
+
+        <a class="btn" href="/download_report/{{ report_id }}">Download JSON</a>
+      </section>
+    </main>
+    <footer class="footer">Bayer — Compliance Manager</footer>
+  </body>
+</html>
