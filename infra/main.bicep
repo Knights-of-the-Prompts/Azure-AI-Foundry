@@ -4,10 +4,10 @@
 @minLength(2)
 @maxLength(12)
 @description('Name for the AI resource and used to derive name of dependent resources.')
-param aiFoundryName string = 'kotpagents'
+param aiFoundryName string = 'aiagents'
 
 @description('Friendly name for your Azure AI Foundry resource')
-param aiFoundryFriendlyName string = 'Knights of the Prompts AI Foundry resource'
+param aiFoundryFriendlyName string = 'Agent Workshop AI Foundry resource'
 
 @description('Description of your Azure AI Foundry resource displayed in AI Foundry')
 param aiFoundryDescription string = 'This is an example AI Foundry resource for use in Azure AI Foundry.'
@@ -19,13 +19,13 @@ param location string = resourceGroup().location
 param tags object = {}
 
 @description('Project description')
-param aiProjectDescription string = 'Knights of the Prompts'
+param aiProjectDescription string = 'Agent Workshop'
 
 @description('Budget amount in USD for the resource group')
 param budgetAmount int = 500
 
 @description('Email addresses to receive budget alerts (optional)')
-param budgetAlertEmails array = ['u****@example.com', 'u****@example.com']
+param budgetAlertEmails array = ['douwe.vande.ruit@capgemini.com']
 
 @description('Whether to deploy the budget alert (requires subscription-level permissions)')
 param deployBudgetAlert bool = false

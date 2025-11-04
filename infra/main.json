@@ -11,7 +11,7 @@
   "parameters": {
     "aiFoundryName": {
       "type": "string",
-      "defaultValue": "kotp",
+      "defaultValue": "aiagents",
       "minLength": 2,
       "maxLength": 12,
       "metadata": {
@@ -20,7 +20,7 @@
     },
     "aiFoundryFriendlyName": {
       "type": "string",
-      "defaultValue": "Knights of the Prompts AI Foundry resource",
+      "defaultValue": "Agent Workshop AI Foundry resource",
       "metadata": {
         "description": "Friendly name for your Azure AI Foundry resource"
       }
@@ -48,7 +48,7 @@
     },
     "aiProjectDescription": {
       "type": "string",
-      "defaultValue": "Knights of the Prompts",
+      "defaultValue": "Agent Workshop",
       "metadata": {
         "description": "Project description"
       }
