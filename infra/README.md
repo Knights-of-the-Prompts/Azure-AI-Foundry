@@ -9,7 +9,7 @@ This template deploys the following resources:
 
 - **Azure AI Foundry Resource**: The main AI resource that serves as the workspace
 - **Azure AI Project**: A project within the foundry for organizing AI assets
-- **Azure OpenAI GPT-4.1 deployment**: Language model deployment for AI agents
+- **Azure OpenAI GPT-4o deployment**: Language model deployment for AI agents
 - **Supporting resources**: Storage, Key Vault, Container Registry, Application Insights
 - **03-Deep-Research**: Advanced research configuration for AI experimentation
 

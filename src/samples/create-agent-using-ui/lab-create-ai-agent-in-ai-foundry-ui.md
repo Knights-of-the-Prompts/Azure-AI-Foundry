@@ -30,7 +30,7 @@ In this Lab, you’ll learn how to create a simple Agent in AI Foundry that can 
 
 ![Select Azure OpenAI resource popup](../../../media/image-foundry2.png)
 
-6. Under **Select or deploy a model**, select the model that was pre-deployed (for Knights of the Prompts this is **gpt-4.1**), then select **Next**.
+6. Under **Select or deploy a model**, select the model that was pre-deployed (for Knights of the Prompts this is **gpt-4o**), then select **Next**.
 
 ![Model selection](../../../media/image-foundry3.png)
 

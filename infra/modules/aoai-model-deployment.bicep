@@ -2,10 +2,10 @@
 param openAIAccountId string
 
 @description('Deployment name.')
-param deploymentName string = 'gpt41'
+param deploymentName string = 'gpt-4o'
 
 @description('Model name.')
-param modelName string = 'gpt-4.1'
+param modelName string = 'gpt-4o'
 
 @description('Model version.')
 param modelVersion string = ''

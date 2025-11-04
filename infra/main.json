@@ -619,14 +619,14 @@
             },
             "deploymentName": {
               "type": "string",
-              "defaultValue": "gpt41",
+              "defaultValue": "gpt-4o",
               "metadata": {
                 "description": "Deployment name."
               }
             },
             "modelName": {
               "type": "string",
-              "defaultValue": "gpt-4.1",
+              "defaultValue": "gpt-4o",
               "metadata": {
                 "description": "Model name."
               }
@@ -759,14 +759,14 @@
             },
             "deploymentName": {
               "type": "string",
-              "defaultValue": "gpt41",
+              "defaultValue": "gpt-4o",
               "metadata": {
                 "description": "Deployment name."
               }
             },
             "modelName": {
               "type": "string",
-              "defaultValue": "gpt-4.1",
+              "defaultValue": "gpt-4o",
               "metadata": {
                 "description": "Model name."
               }
