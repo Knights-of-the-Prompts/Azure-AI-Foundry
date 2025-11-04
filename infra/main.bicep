@@ -73,12 +73,12 @@ module aiProject 'modules/ai-project.bicep' = {
   }
 }
 
-module gpt41Deployment 'modules/aoai-model-deployment.bicep' = {
-  name: 'gpt41-${name}-${uniqueSuffix}-deployment'
+module gpt4oDeployment 'modules/aoai-model-deployment.bicep' = {
+  name: 'gpt4o-${name}-${uniqueSuffix}-deployment'
   params: {
     openAIAccountId: aiFoundry.outputs.aiFoundryId
-    deploymentName: 'gpt41'
-    modelName: 'gpt-4.1'
+    deploymentName: 'gpt4o'
+    modelName: 'gpt-4o'
     capacity: 30
   }
   dependsOn: [
@@ -98,7 +98,7 @@ module o3DeepResearchDeployment 'modules/aoai-model-deployment.bicep' = {
     raiPolicyName: 'Microsoft.DefaultV2'
   }
   dependsOn: [
-    gpt41Deployment
+    gpt4oDeployment
   ]
 }
 

@@ -580,7 +580,7 @@
     {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2022-09-01",
-      "name": "[format('gpt41-{0}-{1}-deployment', variables('name'), variables('uniqueSuffix'))]",
+      "name": "[format('gpt4o-{0}-{1}-deployment', variables('name'), variables('uniqueSuffix'))]",
       "properties": {
         "expressionEvaluationOptions": {
           "scope": "inner"
@@ -591,10 +591,10 @@
             "value": "[reference(resourceId('Microsoft.Resources/deployments', format('foundry-{0}-{1}-deployment', variables('name'), variables('uniqueSuffix'))), '2022-09-01').outputs.aiFoundryId.value]"
           },
           "deploymentName": {
-            "value": "gpt41"
+            "value": "gpt4o"
           },
           "modelName": {
-            "value": "gpt-4.1"
+            "value": "gpt-4o"
           },
           "capacity": {
             "value": 30
@@ -845,7 +845,7 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.Resources/deployments', format('foundry-{0}-{1}-deployment', variables('name'), variables('uniqueSuffix')))]",
-        "[resourceId('Microsoft.Resources/deployments', format('gpt41-{0}-{1}-deployment', variables('name'), variables('uniqueSuffix')))]"
+        "[resourceId('Microsoft.Resources/deployments', format('gpt4o-{0}-{1}-deployment', variables('name'), variables('uniqueSuffix')))]"
       ]
     }
   ]
