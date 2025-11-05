@@ -154,8 +154,8 @@ class Utilities:
         except Exception as e:
             print(f"Error handling file downloads: {e}")
 
-    def create_vector_store(self, project_client: AIProjectClient, files: list[str], vector_name_name: str) -> None:
-        """Upload a file to the project."""
+    def create_vector_store(self, project_client: AIProjectClient, files: list[str], vector_store_name: str):
+        """Upload files and create a vector store."""
 
         file_ids = []
         env = os.getenv("ENVIRONMENT", "local")
@@ -166,15 +166,16 @@ class Utilities:
             file_path = Path(f"{prefix}{file}")
             self.log_msg_purple(f"Uploading file: {file_path}")
             with file_path.open("rb") as f:
-                # Upload file using agents upload_file method
-                uploaded_file = project_client.agents.upload_file(file=f, purpose="assistants")
+                # Upload file using the correct API method
+                uploaded_file = project_client.agents.files.upload(file=f, purpose="assistants")
                 file_ids.append(uploaded_file.id)
+                self.log_msg_purple(f"Uploaded file: {uploaded_file.id}")
 
         self.log_msg_purple("Creating the vector store")
 
-        # Create a vector store  using the vector_stores.create_and_poll method
-        vector_store = project_client.agents.create_vector_store_and_poll(
-            file_ids=file_ids, name=vector_name_name
+        # Create a vector store using the correct API method
+        vector_store = project_client.agents.vector_stores.create_and_poll(
+            file_ids=file_ids, name=vector_store_name
         )
         self.log_msg_purple(f"Vector store created: {vector_store.id}")
         return vector_store
